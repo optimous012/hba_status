@@ -24,45 +24,26 @@
   SOFTWARE.
 */
 
-const ES = ' ';
-
-include 'lib/Main.php';
-include 'lib/Hba.php';
-require_once 'lib/Error.php';
+require_once __DIR__ . '/lib/Main.php';
+require_once __DIR__ . '/lib/Hba.php';
+require_once __DIR__ . '/lib/Error.php';
 
 use hbastat\lib\Hba;
 use hbastat\lib\Main;
-use hbastat\lib\Error;
-
-// Enable error logging for debugging
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
 
 if (!isset($hbastat_cfg)) {
     $hbastat_cfg = Main::getSettings();
 }
 
-// Debug logging
-error_log("HBA DEBUG: STORCLI_PATH = " . ($hbastat_cfg['STORCLI_PATH'] ?? 'NOT SET'));
-
 // $hbastat_inventory should be set if called from settings page code
 if (isset($hbastat_inventory) && $hbastat_inventory) {
     $hbastat_cfg['inventory'] = true;
-    // Settings page looks for $hbastat_data specifically -- inventory all supported HBA types
     $hbastat_data = (new Hba($hbastat_cfg))->getInventory();
+    $json = json_encode($hbastat_data);
 } else {
-    $hbastat_data = (new Hba($hbastat_cfg))->getStatistics();
+    $json = (new Hba($hbastat_cfg))->getStatistics();
 }
 
-// Debug the result
-error_log("HBA DEBUG: Result = " . $hbastat_data);
-
-$json = $hbastat_data ;
 header('Content-Type: application/json');
-header('Content-Length:' . ES . strlen($json));
+header('Content-Length: ' . strlen($json));
 echo $json;
-file_put_contents("/tmp/hbajson2","Time = ".date(DATE_RFC2822)."\n") ;
-file_put_contents("/tmp/hbajson2",$json."\n",FILE_APPEND) ;
-
-?>

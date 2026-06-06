@@ -27,6 +27,11 @@ Title="HBA Statistics"
   SOFTWARE.
 */
 
+require_once __DIR__ . '/lib/Main.php';
+require_once __DIR__ . '/lib/Hba.php';
+
+use hbastat\lib\Hba;
+
 function save_ini_file($file, $array) {
    $plugin = "hbastat";
 
@@ -54,18 +59,60 @@ function save_cfg($val) {
   save_ini_file("hbastat.cfg", $val) ;
 }
 
-$cfg = $hbastat_cfg        = parse_plugin_cfg("hbastat", true);
+$cfg = $hbastat_cfg = parse_plugin_cfg("hbastat", true);
 
 if (count($_POST)) {
   $cfg = NULL ;
   if ($_POST['#apply'] == "_(Apply)_") {
     array_map(function($k, $v) use (&$cfg) { if($k[0] != "#") $cfg[$k] = $v; }, array_keys($_POST), $_POST );
     save_cfg($cfg);
-    $hbastat_cfg        = parse_plugin_cfg("hbastat", true);
+    $hbastat_cfg = parse_plugin_cfg("hbastat", true);
     unset($_POST) ;
   }
 }
 
+// Detect controllers via storcli inventory. Falls back to a generic 0/1 list
+// so the user can still configure the plugin if storcli is unreachable.
+$detected = [];
+try {
+    $detected = (new Hba($hbastat_cfg))->getInventory();
+} catch (Throwable $e) {
+    $detected = [];
+}
+if (empty($detected)) {
+    $detected = [
+        ['id' => '0', 'model' => 'Controller 0', 'vendor' => 'Unknown'],
+        ['id' => '1', 'model' => 'Controller 1', 'vendor' => 'Unknown'],
+    ];
+}
+
+// Per-controller poller fields. Key = cfg suffix, Label = display label.
+$pollerFields = [
+    'DISPSTATUS'      => 'Status',
+    'DISPTemperature' => 'Temperature',
+    'DISPPresent'     => 'Present Drives',
+    'DISPMissng'      => 'Missing Drives',
+    'DISPOptl'        => 'Optimal Drives',
+    'DISPDgrd'        => 'Failed Drives',
+    'DISPDdff'        => 'Degraded Drives',
+    'DISPOnLn'        => 'Offline Drives',
+    'DISPRbld'        => 'Rebuild Operations',
+    'DISPChky'        => 'Consistency Check',
+    'DISPChkp'        => 'Predictive Failure',
+    'DISPBlk'         => 'Background Operations',
+];
+
+// Helper: per-controller value with fallback to the global key, then to "1".
+function hba_cfg_val(array $cfg, string $base, string $ctlId, string $default = '1'): string {
+    $perCtl = $base . '_' . $ctlId;
+    if (isset($cfg[$perCtl]) && $cfg[$perCtl] !== '') {
+        return (string)$cfg[$perCtl];
+    }
+    if (isset($cfg[$base]) && $cfg[$base] !== '') {
+        return (string)$cfg[$base];
+    }
+    return $default;
+}
 ?>
 <script>
 $(function() {
@@ -78,118 +125,65 @@ $(function() {
   <input type="hidden" name="#file" value="hbastat/hbastat.cfg" />
 
   Storcli Command Path:
-  : <input type="text" name="STORCLI_PATH" class="wide" value="<?php echo isset($hbastat_cfg['STORCLI_PATH']) ? $hbastat_cfg['STORCLI_PATH'] : 'storcli'; ?>" placeholder="storcli or storcli64 or full path to executable">
+  : <input type="text" name="STORCLI_PATH" class="wide" value="<?php echo isset($hbastat_cfg['STORCLI_PATH']) ? $hbastat_cfg['STORCLI_PATH'] : 'storcli64'; ?>" placeholder="storcli or storcli64 or full path to executable">
     <br><br>
     <small>Enter the command to use for storcli (e.g., storcli, storcli64, or /full/path/to/storcli)</small>
 
   Vendor:
   : <select id="VENDOR" name="VENDOR" size="1">
-      <?=mk_option($hbastat_cfg['VENDOR'], "", "Change Me");?>
-      <?=mk_option($hbastat_cfg['VENDOR'], "lsilogic", "LSI Logic");?>
-      <?=mk_option($hbastat_cfg['VENDOR'], "broadcom", "Broadcom");?>
-      <?=mk_option($hbastat_cfg['VENDOR'], "adaptec", "Adaptec");?>
-      <?=mk_option($hbastat_cfg['VENDOR'], "intel", "Intel");?>
-      <?=mk_option($hbastat_cfg['VENDOR'], "microsemi", "Microsemi");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "", "Change Me");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "lsilogic", "LSI Logic");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "broadcom", "Broadcom");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "adaptec", "Adaptec");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "intel", "Intel");?>
+      <?=mk_option($hbastat_cfg['VENDOR'] ?? '', "microsemi", "Microsemi");?>
     </select>
-
-  Controller ID for Dashboard:
-  : <select id="CONTROLLERID" name="CONTROLLERID" size="1" length="50">
-      <?php
-          // This would normally be populated from inventory data
-          // For now, we'll just have a default option
-          printf(mk_option($hbastat_cfg['CONTROLLERID'], "0", "Controller 0"));
-          printf(mk_option($hbastat_cfg['CONTROLLERID'], "1", "Controller 1"));
-          printf(mk_option($hbastat_cfg['CONTROLLERID'], "2", "Controller 2"));
-          printf(mk_option($hbastat_cfg['CONTROLLERID'], "3", "Controller 3"));
-      ?>
-  </select>
 
   Temperature Format:
   : <select id="TEMPFORMAT" name="TEMPFORMAT" size="1">
-      <?=mk_option($hbastat_cfg['TEMPFORMAT'], "C", "Celsius");?>
-      <?=mk_option($hbastat_cfg['TEMPFORMAT'], "F", "Fahrenheit");?>
+      <?=mk_option($hbastat_cfg['TEMPFORMAT'] ?? 'C', "C", "Celsius");?>
+      <?=mk_option($hbastat_cfg['TEMPFORMAT'] ?? 'C', "F", "Fahrenheit");?>
     </select>
 
   UI Automatic Refresh / Interval (Milliseconds):
   : <select id="UIREFRESH" name="UIREFRESH" size="1">
-      <?=mk_option($hbastat_cfg['UIREFRESH'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['UIREFRESH'], "1", "Yes");?>
+      <?=mk_option($hbastat_cfg['UIREFRESH'] ?? '1', "0", "No");?>
+      <?=mk_option($hbastat_cfg['UIREFRESH'] ?? '1', "1", "Yes");?>
     </select>
-    <input type="number" name="UIREFRESHINT" class="narrow" min="2000" maxlength="5" value="<?=$hbastat_cfg['UIREFRESHINT'];?>" placeholder="5000">
+    <input type="number" name="UIREFRESHINT" class="narrow" min="2000" maxlength="5" value="<?=$hbastat_cfg['UIREFRESHINT'] ?? '5000';?>" placeholder="5000">
 
-  <h2><b>Enabled Pollers</b></h2>
+  <h2><b>Detected Controllers</b></h2>
+  <small>Toggle each controller's visibility on the Dashboard and pick which fields to display for it.</small>
+  <br><br>
 
-  Status:
-  : <select id="DISPSTATUS" name="DISPSTATUS" size="1">
-      <?=mk_option($hbastat_cfg['DISPSTATUS'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPSTATUS'], "1", "Yes");?>
-    </select>
+<?php foreach ($detected as $ctl): ?>
+<?php
+    $cid = (string)$ctl['id'];
+    $label = "Controller {$cid}";
+    if (!empty($ctl['vendor']) || !empty($ctl['model'])) {
+        $label .= ' — ' . trim(($ctl['vendor'] ?? '') . ' ' . ($ctl['model'] ?? ''));
+    }
+    $showVal = hba_cfg_val($hbastat_cfg, 'SHOWCTRL', $cid, '1');
+?>
+  <h3><b><?=htmlspecialchars($label)?></b></h3>
 
-  Temperature:
-  : <select id="DISPTemperature" name="DISPTemperature" size="1">
-      <?=mk_option($hbastat_cfg['DISPTemperature'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPTemperature'], "1", "Yes");?>
-    </select>
-
-  Present Drives:
-  : <select id="DISPPresent" name="DISPPresent" size="1">
-      <?=mk_option($hbastat_cfg['DISPPresent'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPPresent'], "1", "Yes");?>
-    </select>
-
-  Missing Drives:
-  : <select id="DISPMissng" name="DISPMissng" size="1">
-      <?=mk_option($hbastat_cfg['DISPMissng'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPMissng'], "1", "Yes");?>
+  Show on Dashboard:
+  : <select id="SHOWCTRL_<?=$cid?>" name="SHOWCTRL_<?=$cid?>" size="1">
+      <?=mk_option($showVal, "0", "No");?>
+      <?=mk_option($showVal, "1", "Yes");?>
     </select>
 
-  Optimal Drives:
-  : <select id="DISPOptl" name="DISPOptl" size="1">
-      <?=mk_option($hbastat_cfg['DISPOptl'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPOptl'], "1", "Yes");?>
+<?php foreach ($pollerFields as $key => $label): ?>
+<?php $val = hba_cfg_val($hbastat_cfg, $key, $cid, '1'); ?>
+  <?=htmlspecialchars($label)?>:
+  : <select id="<?=$key?>_<?=$cid?>" name="<?=$key?>_<?=$cid?>" size="1">
+      <?=mk_option($val, "0", "No");?>
+      <?=mk_option($val, "1", "Yes");?>
     </select>
 
-  Failed Drives:
-  : <select id="DISPDgrd" name="DISPDgrd" size="1">
-      <?=mk_option($hbastat_cfg['DISPDgrd'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPDgrd'], "1", "Yes");?>
-    </select>
-
-  Degraded Drives:
-  : <select id="DISPDdff" name="DISPDdff" size="1">
-      <?=mk_option($hbastat_cfg['DISPDdff'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPDdff'], "1", "Yes");?>
-    </select>
-
-  Offline Drives:
-  : <select id="DISPOnLn" name="DISPOnLn" size="1">
-      <?=mk_option($hbastat_cfg['DISPOnLn'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPOnLn'], "1", "Yes");?>
-    </select>
-
-  Rebuild Operations:
-  : <select id="DISPRbld" name="DISPRbld" size="1">
-      <?=mk_option($hbastat_cfg['DISPRbld'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPRbld'], "1", "Yes");?>
-    </select>
-
-  Consistency Check:
-  : <select id="DISPChky" name="DISPChky" size="1">
-      <?=mk_option($hbastat_cfg['DISPChky'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPChky'], "1", "Yes");?>
-    </select>
-
-  Predictive Failure:
-  : <select id="DISPChkp" name="DISPChkp" size="1">
-      <?=mk_option($hbastat_cfg['DISPChkp'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPChkp'], "1", "Yes");?>
-    </select>
-
-  Background Operations:
-  : <select id="DISPBlk" name="DISPBlk" size="1">
-      <?=mk_option($hbastat_cfg['DISPBlk'], "0", "No");?>
-      <?=mk_option($hbastat_cfg['DISPBlk'], "1", "Yes");?>
-    </select>
+<?php endforeach; ?>
+  <br>
+<?php endforeach; ?>
 
   <br><br><br>
 

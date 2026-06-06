@@ -29,8 +29,45 @@ Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0-b
 
 $hbastat_cfg = parse_plugin_cfg('hbastat', true);
 
-$controller_selected = isset($hbastat_cfg['CONTROLLERID']) ? $hbastat_cfg['CONTROLLERID'] : 0;
+$pluginConfigured = !(empty($hbastat_cfg) || !isset($hbastat_cfg['VENDOR']) || $hbastat_cfg['VENDOR'] == "" || $hbastat_cfg['VENDOR'] == "Change Me");
 
+// Build the list of controllers to display: any SHOWCTRL_X cfg key set to "1".
+$visibleControllers = [];
+foreach ($hbastat_cfg as $key => $val) {
+    if (preg_match('/^SHOWCTRL_(\d+)$/', $key, $m) && (string)$val === '1') {
+        $visibleControllers[] = $m[1];
+    }
+}
+sort($visibleControllers, SORT_NUMERIC);
+
+// Per-controller poller value with fallback to global key, then default "1".
+function hba_disp(array $cfg, string $base, string $ctlId, string $default = '1'): string {
+    $perCtl = $base . '_' . $ctlId;
+    if (isset($cfg[$perCtl]) && $cfg[$perCtl] !== '') {
+        return (string)$cfg[$perCtl];
+    }
+    if (isset($cfg[$base]) && $cfg[$base] !== '') {
+        return (string)$cfg[$base];
+    }
+    return $default;
+}
+
+// Rows to render per controller. Each row: [DISP key, label, span class suffix].
+$rows = [
+    ['DISPSTATUS',      'Vendor / Product',              'vendor-product'],
+    ['DISPTemperature', 'Temperature',                   'temperature'],
+    ['DISPSTATUS',      'Serial / Firmware',             'serial-firmware'],
+    ['DISPPresent',     'Present Drives',                'present'],
+    ['DISPMissng',      'Missing Drives',                'missing'],
+    ['DISPOptl',        'Optimal Drives',                'optimal'],
+    ['DISPDgrd',        'Failed Drives',                 'failed'],
+    ['DISPDdff',        'Degraded Drives',               'degraded'],
+    ['DISPOnLn',        'Offline Drives',                'offline'],
+    ['DISPRbld',        'Rebuild Operations',            'rebuild'],
+    ['DISPChky',        'Consistency Check',             'consistency'],
+    ['DISPChkp',        'Predictive Failure',            'predictive'],
+    ['DISPBlk',         'Background Operations',         'background'],
+];
 ?>
 <style type="text/css">
     @import url("/plugins/hbastat/css/style.css");
@@ -44,10 +81,10 @@ $controller_selected = isset($hbastat_cfg['CONTROLLERID']) ? $hbastat_cfg['CONTR
             <td class='next' colspan='3'>
                 <i class='icon-hardware'></i>
                 <div class='section'>HBA Controllers<br>
-<?php if (empty($hbastat_cfg) || !isset($hbastat_cfg['VENDOR']) || $hbastat_cfg['VENDOR'] == "" || $hbastat_cfg['VENDOR'] == "Change Me") : printf("\t\t\t\t<span>Please configure HBAStat settings first</span></div>"); else : ?>
-                    <div id='controller-displays'>
-                        <!-- Controller displays will be inserted here by JavaScript -->
-                    </div>
+<?php if (!$pluginConfigured): ?>
+                    <span>Please configure HBAStat settings first</span>
+<?php elseif (empty($visibleControllers)): ?>
+                    <span>No controllers selected — open settings to enable one.</span>
 <?php endif; ?>
                 </div>
                 <i class='fa fa-fw chevron mt0' id='dash_hbastat_toggle' onclick='toggleChevron("dash_hbastat_toggle",0)'></i>
@@ -56,52 +93,53 @@ $controller_selected = isset($hbastat_cfg['CONTROLLERID']) ? $hbastat_cfg['CONTR
             </td>
             <td></td>
         </tr>
-<?php if (empty($hbastat_cfg) || !isset($hbastat_cfg['VENDOR']) || $hbastat_cfg['VENDOR'] == "" || $hbastat_cfg['VENDOR'] == "Change Me") : printf("\t</tbody>\n</table>"); else : ?>
-        <!-- Drive statistics (will show data from first controller or aggregated) -->
-        <tr class="dash_hbastat_toggle hba-enviro">
+<?php if ($pluginConfigured && !empty($visibleControllers)): ?>
+<?php foreach ($visibleControllers as $cid): ?>
+        <tr class="dash_hbastat_toggle hba-enviro hba-section hba-section-<?=$cid?>">
             <td></td>
-            <td><span class='hba-vendor'></span>&nbsp;<span class='hba-product'></span></td>
+            <td colspan="3"><b>Controller <?=htmlspecialchars($cid)?></b></td>
+        </tr>
+<?php foreach ($rows as $row): list($dispKey, $label, $suffix) = $row; ?>
+<?php if (hba_disp($hbastat_cfg, $dispKey, $cid) !== '1') continue; ?>
+<?php if ($suffix === 'vendor-product'): ?>
+        <tr class="dash_hbastat_toggle hba-enviro hba-row-<?=$cid?>">
+            <td></td>
+            <td><span class='hba-vendor-<?=$cid?>'></span>&nbsp;<span class='hba-product-<?=$cid?>'></span></td>
             <td></td>
             <td></td>
         </tr>
-        <tr class="dash_hbastat_toggle hba-enviro">
+<?php elseif ($suffix === 'temperature'): ?>
+        <tr class="dash_hbastat_toggle hba-enviro hba-row-<?=$cid?>">
             <td></td>
-            <td>Present - Missing Drives</td>
-            <td><span class='hba-present load'></span></td>
-            <td><span class='hba-missing load'></span></td>
-        </tr>
-        <tr class="dash_hbastat_toggle hba-enviro">
+            <td>Temperature</td>
+            <td><span class='hba-temperature-<?=$cid?> load'></span></td>
             <td></td>
-            <td>Optimal - Failed Drives</td>
-            <td><span class='hba-optimal load'></span></td>
-            <td><span class='hba-failed load'></span></td>
         </tr>
-        <tr class="dash_hbastat_toggle hba-enviro">
+<?php elseif ($suffix === 'serial-firmware'): ?>
+        <tr class="dash_hbastat_toggle hba-enviro hba-row-<?=$cid?>">
             <td></td>
-            <td>Degraded - Offline Drives</td>
-            <td><span class='hba-degraded load'></span></td>
-            <td><span class='hba-offline load'></span></td>
+            <td>Serial / Firmware</td>
+            <td><span class='hba-serialno-<?=$cid?> load'></span></td>
+            <td><span class='hba-firmware-<?=$cid?> load'></span></td>
         </tr>
-        <tr class="dash_hbastat_toggle hba-enviro">
+<?php else: ?>
+        <tr class="dash_hbastat_toggle hba-enviro hba-row-<?=$cid?>">
             <td></td>
-            <td>Rebuild - Consistency Check</td>
-            <td><span class='hba-rebuild load'></span></td>
-            <td><span class='hba-consistency load'></span></td>
-        </tr>
-        <tr class="dash_hbastat_toggle hba-enviro">
+            <td><?=htmlspecialchars($label)?></td>
+            <td><span class='hba-<?=$suffix?>-<?=$cid?> load'></span></td>
             <td></td>
-            <td>Predictive Failure - Background Ops</td>
-            <td><span class='hba-predictive load'></span></td>
-            <td><span class='hba-background load'></span></td>
         </tr>
+<?php endif; ?>
+<?php endforeach; ?>
+<?php endforeach; ?>
 <?php endif; ?>
     </tbody>
 </table>
 <script type="text/javascript" src="/plugins/hbastat/scripts/hbastat.js"></script>
 <script type="text/javascript">
     $(hbastat_status);
-    if (<?=$hbastat_cfg['UIREFRESH'];?>) {
-        setInterval(hbastat_status, <?=max(abs($display['refresh']), $hbastat_cfg['UIREFRESHINT']);?>);
+    if (<?=$hbastat_cfg['UIREFRESH'] ?? '0';?>) {
+        setInterval(hbastat_status, <?=max(abs($display['refresh']), $hbastat_cfg['UIREFRESHINT'] ?? 5000);?>);
     }
     $(hbastat_dash);
 </script>

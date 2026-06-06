@@ -34,9 +34,41 @@ use SimpleXMLElement;
  */
 class Hba extends Main
 {
-    // We'll get the command from settings instead of hardcoding it
     const INVENTORY_PARAM = 'show';
-    const STATISTICS_PARAM = 'show all';
+
+    /**
+     * Vendor ID → human-readable name map.
+     */
+    private static $vendorMap = [
+        '1000' => 'Broadcom / LSI Logic',
+        '1028' => 'Dell',
+        '103c' => 'HP',
+        '1077' => 'QLogic',
+        '10df' => 'Marvell',
+        '110a' => 'VMware',
+        '111d' => 'IBM',
+        '1170' => 'Innodisk',
+        '11ab' => 'Marvell',
+        '1217' => 'Microsemi',
+        '1274' => 'LSI Logic / Symbios',
+        '13f5' => 'Samsung',
+        '144d' => 'Samsung',
+        '152d' => 'Microsemi',
+        '15b3' => 'NetApp',
+        '15b7' => 'Microsemi',
+        '15d0' => 'Seagate',
+        '15d9' => 'Western Digital',
+        '163c' => 'SanDisk',
+        '1673' => 'Intel',
+        '17aa' => 'Lenovo',
+        '1849' => 'Toshiba',
+        '1912' => 'Microsemi',
+        '1987' => 'Microsemi',
+        '19e5' => 'Microsemi',
+        '1b4b' => 'Seagate',
+        '1daf' => 'AMD',
+        '1de1' => 'HP',
+    ];
 
     /**
      * Hba constructor.
@@ -44,7 +76,6 @@ class Hba extends Main
      */
     public function __construct(array $settings = [])
     {
-        // Set the command from settings, defaulting to 'storcli' if not set
         if (!isset($settings['STORCLI_PATH']) || empty($settings['STORCLI_PATH'])) {
             $settings['STORCLI_PATH'] = 'storcli';
         }
@@ -61,122 +92,41 @@ class Hba extends Main
     {
         $result = [];
 
-        if ($this->cmdexists) {
-            $this->runCommand($this->settings['cmd'], self::INVENTORY_PARAM, false);
+        if (!$this->cmdexists) {
+            return $result;
+        }
 
-            // Debug logging (commented out for production)
-            // file_put_contents("/tmp/hbastat_inventory_debug.txt",
-            //     "Command: {$this->settings['cmd']} " . self::INVENTORY_PARAM . "\n" .
-            //     "Output length: " . strlen($this->stdout) . "\n" .
-            //     "Output:\n{$this->stdout}\n---\n",
-            //     FILE_APPEND);
+        $this->runCommand($this->settings['cmd'], self::INVENTORY_PARAM, false);
 
-            if (!empty($this->stdout) && strlen($this->stdout) > 0) {
-                // Parse storcli64 show output for controller information
-                // Format from storcli64 show:
-                // CLI Version = ...
-                // Operating system = ...
-                // Status Code = 0
-                // Status = Success
-                // Description = None
-                //
-                // Number of Controllers = 2
-                // Host Name = Cybertron
-                // ...
-                // IT System Overview :
-                // ==================
-                // --------------------------------------------------------------------------
-                // Ctl Model       AdapterType   VendId DevId SubVendId SubDevId PCI Address
-                // --------------------------------------------------------------------------
-                //   0 SAS9300-16i   SAS3008(C0) 0x1000  0x97    0x1000   0x3130 00:03:00:00
-                //   1 SAS9300-16i   SAS3008(C0) 0x1000  0x97    0x1000   0x3130 00:05:00:00
-                // --------------------------------------------------------------------------
+        if (empty($this->stdout)) {
+            return $result;
+        }
 
-                $lines = explode("\n", $this->stdout);
-                $controllerInfo = [];
+        $lines = explode("\n", $this->stdout);
+        $inControllerSection = false;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+
+            if (strpos($line, 'Ctl Model') !== false && strpos($line, 'AdapterType') !== false) {
+                $inControllerSection = true;
+                continue;
+            }
+
+            if (strpos($line, '----') === 0) {
+                continue;
+            }
+
+            if ($inControllerSection && preg_match('/^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)/', $line, $m)) {
+                $vendId = str_replace('0x', '', $m[4]);
+                $result[] = [
+                    'id'        => $m[1],
+                    'model'     => $m[2],
+                    'vendor'    => self::$vendorMap[$vendId] ?? 'Unknown (' . $vendId . ')',
+                    'interface' => $m[3],
+                ];
+            } elseif ($inControllerSection && $line === '') {
                 $inControllerSection = false;
-
-                foreach ($lines as $line) {
-                    $line = trim($line);
-
-                    // Skip until we reach the controller table header
-                    if (strpos($line, 'Ctl Model') !== false && strpos($line, 'AdapterType') !== false) {
-                        $inControllerSection = true;
-                        continue;
-                    }
-
-                    // Skip separator lines
-                    if (strpos($line, '--------------------------------------------------------------------------') !== false) {
-                        continue;
-                    }
-
-                    // Parse controller data lines (they start with spaces and a number)
-                    if ($inControllerSection && preg_match('/^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)/', $line, $matches)) {
-                        $ctlNum = trim($matches[1]);
-                        $model = trim($matches[2]);
-                        $adapterType = trim($matches[3]);
-                        $vendId_raw = trim($matches[4]);
-                        $devId = trim($matches[5]);
-                        $subVendId = trim($matches[6]);
-                        $subDevId = trim($matches[7]);
-                        $pciAddress = trim($matches[8]);
-
-                        // Debug logging
-                        file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                            "Raw line: '" . $line . "'\n" .
-                            "Matches[0] = '" . (isset($matches[0]) ? $matches[0] : 'NULL') . "'\n" .
-                            "Matches[1] = '" . (isset($matches[1]) ? $matches[1] : 'NULL') . "'\n" .
-                            "Matches[2] = '" . (isset($matches[2]) ? $matches[2] : 'NULL') . "'\n" .
-                            "Matches[3] = '" . (isset($matches[3]) ? $matches[3] : 'NULL') . "'\n" .
-                            "Matches[4] = '" . (isset($matches[4]) ? $matches[4] : 'NULL') . "'\n" .
-                            "Matches[5] = '" . (isset($matches[5]) ? $matches[5] : 'NULL') . "'\n" .
-                            "Matches[6] = '" . (isset($matches[6]) ? $matches[6] : 'NULL') . "'\n" .
-                            "Matches[7] = '" . (isset($matches[7]) ? $matches[7] : 'NULL') . "'\n" .
-                            "Matches[8] = '" . (isset($matches[8]) ? $matches[8] : 'NULL') . "'\n",
-                            FILE_APPEND);
-
-                        $vendId_raw = trim($matches[4]);
-                        file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                            "vendId_raw (trimmed matches[4]): '" . $vendId_raw . "'\n",
-                            FILE_APPEND);
-
-                        // Extract vendor ID (remove 0x prefix if present)
-                        $vendId = str_replace('0x', '', $vendId_raw);
-                        file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                            "After removing 0x prefix: '" . $vendId . "'\n",
-                            FILE_APPEND);
-
-                        // Extract vendor name from vendId (this is a simplification)
-                        $vendorName = $this->getVendorNameFromId($vendId);
-
-                        // Debug logging for vendor name
-                        file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                            "Vendor ID: '" . $vendId . "' (type: " . gettype($vendId) . ") -> Vendor Name: '$vendorName'\n",
-                            FILE_APPEND);
-
-                        // Also show what's in the vendor map for this ID
-                        $vendIdClean = str_replace('0x', '', $vendId);
-                        $mapValue = isset($this->getVendorMap()[$vendIdClean]) ? $this->getVendorMap()[$vendIdClean] : 'NOT FOUND';
-                        file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                            "Looking up '$vendIdClean' in vendor map: '$mapValue'\n",
-                            FILE_APPEND);
-
-                        $result[] = [
-                            'id' => $ctlNum,
-                            'model' => $model,
-                            'vendor' => $vendorName,
-                            'serialno' => 'N/A', // Serial number not in this output, would need '/call show' for specific controller
-                            'firmware' => 'N/A', // Firmware version not in this output, would need '/call show' for specific controller
-                            'interface' => $adapterType
-                        ];
-                    }
-                }
-
-                // Debug logging for results
-                file_put_contents("/tmp/hbastat_inventory_debug.txt",
-                    "Found controllers: " . count($result) . "\n" .
-                    print_r($result, true) . "\n---\n",
-                    FILE_APPEND);
             }
         }
 
@@ -184,276 +134,188 @@ class Hba extends Main
     }
 
     /**
-     * Extract vendor name from vendor ID
+     * Retrieves HBA controller statistics for every detected controller.
      *
-     * @param string $vendId
-     * @return string
-     */
-    private function getVendorNameFromId(string $vendId): string
-    {
-        // Remove 0x prefix if present
-        $vendId = str_replace('0x', '', $vendId);
-
-        // Map common vendor IDs to names
-        $vendorMap = [
-            '1000' => 'Broadcom / LSI Logic',
-            '1028' => 'Dell',
-            '103c' => 'HP',
-            '1077' => 'QLogic',
-            '10df' => 'Marvell',
-            '110a' => 'VMware',
-            '111d' => 'IBM',
-            '1170' => 'Innodisk',
-            '11ab' => 'Marvell',
-            '1217' => 'Microsemi',
-            '1274' => 'LSI Logic / Symbios',
-            '13f5' => 'Samsung',
-            '144d' => 'Samsung',
-            '152d' => 'Microsemi',
-            '15b3' => 'NetApp',
-            '15b7' => 'Microsemi',
-            '15d0' => 'Seagate',
-            '15d9' => 'Western Digital',
-            '163c' => 'SanDisk',
-            '1673' => 'Intel',
-            '17aa' => 'Lenovo',
-            '1849' => 'Toshiba',
-            '1912' => 'Microsemi',
-            '1987' => 'Microsemi',
-            '19e5' => 'Microsemi',
-            '1a03' => 'Device',
-            '1b4b' => 'Seagate',
-            '1b73' => 'Windows',
-            '1bd8' => 'Etron',
-            '1c36' => 'Rockchip',
-            '1c58' => 'Rockchip',
-            '1d6f' => 'Trident',
-            '1daf' => 'AMD',
-            '1de1' => 'HP',
-            '1df0' => 'Realtek',
-            '1df7' => 'Realtek',
-            '1e13' => 'Realtek',
-            '1ecb' => 'Lenovo',
-            '1ef7' => 'Realtek',
-            '1f24' => 'ASMedia',
-            '1fbb' => 'Realtek',
-        ];
-
-        return $vendorMap[$vendId] ?? 'Unknown (' . $vendId . ')';
-    }
-
-    /**
-     * Get the vendor map for debugging
-     *
-     * @return array
-     */
-    private function getVendorMap(): array
-    {
-        return [
-            '1000' => 'Broadcom / LSI Logic',
-            '1028' => 'Dell',
-            '103c' => 'HP',
-            '1077' => 'QLogic',
-            '10df' => 'Marvell',
-            '110a' => 'VMware',
-            '111d' => 'IBM',
-            '1170' => 'Innodisk',
-            '11ab' => 'Marvell',
-            '1217' => 'Microsemi',
-            '1274' => 'LSI Logic / Symbios',
-            '13f5' => 'Samsung',
-            '144d' => 'Samsung',
-            '152d' => 'Microsemi',
-            '15b3' => 'NetApp',
-            '15b7' => 'Microsemi',
-            '15d0' => 'Seagate',
-            '15d9' => 'Western Digital',
-            '163c' => 'SanDisk',
-            '1673' => 'Intel',
-            '17aa' => 'Lenovo',
-            '1849' => 'Toshiba',
-            '1912' => 'Microsemi',
-            '1987' => 'Microsemi',
-            '19e5' => 'Microsemi',
-            '1a03' => 'Device',
-            '1b4b' => 'Seagate',
-            '1b73' => 'Windows',
-            '1bd8' => 'Etron',
-            '1c36' => 'Rockchip',
-            '1c58' => 'Rockchip',
-            '1d6f' => 'Trident',
-            '1daf' => 'AMD',
-            '1de1' => 'HP',
-            '1df0' => 'Realtek',
-            '1df7' => 'Realtek',
-            '1e13' => 'Realtek',
-            '1ecb' => 'Lenovo',
-            '1ef7' => 'Realtek',
-            '1f24' => 'ASMedia',
-            '1fbb' => 'Realtek',
-        ];
-    }
-
-    /**
-     * Retrieves HBA controller statistics
+     * @return string JSON
      */
     public function getStatistics()
     {
-        // Get inventory first to know what controllers we have
         $controllers = $this->getInventory();
-
-        // Debug logging
-        error_log("HBA DEBUG: getStatistics: controllers = " . print_r($controllers, true));
 
         if (empty($controllers)) {
             $this->pageData['error'][] = 'No HBA controllers found';
             return json_encode($this->pageData);
         }
 
-        // Initialize array to hold all controller data
         $allControllersData = [];
 
-        // Process each controller
         foreach ($controllers as $controller) {
-            // Debug logging
-            error_log("HBA DEBUG: getStatistics: processing controller = " . print_r($controller, true));
+            $id = $controller['id'];
 
-            // Set basic controller info
             $controllerData = [
-                'controller' => $controller['id'] ?? 'N/A',
-                'vendor' => isset($controller['vendor']) ? $controller['vendor'] : 'Unknown',
-                'product' => isset($controller['model']) ? $controller['model'] : 'Unknown',
-                'serialno' => isset($controller['serialno']) ? $controller['serialno'] : 'N/A',
-                'firmware' => isset($controller['firmware']) ? $controller['firmware'] : 'N/A',
-                'temperature' => 'N/A', // Default value
+                'controller'  => $id,
+                'vendor'      => $controller['vendor'] ?? 'Unknown',
+                'product'     => $controller['model'] ?? 'Unknown',
+                'serialno'    => 'N/A',
+                'firmware'    => 'N/A',
+                'temperature' => 'N/A',
+                'present'     => 0,
+                'missing'     => 0,
+                'optimal'     => 0,
+                'failed'      => 0,
+                'degraded'    => 0,
+                'offline'     => 0,
+                'rebuild'     => 0,
+                'consistency' => 0,
+                'predictive'  => 0,
+                'background'  => 0,
             ];
 
-            // Run detailed statistics command for this controller to get temperature
-            $statisticsParam = "/c{$controller['id']} show temperature";
-            $this->runCommand($this->settings['cmd'], $statisticsParam, false);
+            $this->runCommand($this->settings['cmd'], "/c{$id} show all", false);
 
-            if (!empty($this->stdout) && strlen($this->stdout) > 0) {
-                $this->parseStatistics($this->stdout);
-                // Update temperature from parsed statistics
-                if (isset($this->pageData['temperature']) && $this->pageData['temperature'] !== 'N/A') {
-                    $controllerData['temperature'] = $this->pageData['temperature'];
-                }
+            if (!empty($this->stdout)) {
+                $this->parseControllerShowAll($this->stdout, $controllerData);
             } else {
                 $controllerData['error'] = 'Failed to retrieve HBA statistics';
             }
 
-            // Add to our collection
             $allControllersData[] = $controllerData;
         }
 
-        // If there's only one controller and no specific CONTROLLERID set,
-        // maintain backward compatibility by returning single controller data
-        if (count($controllers) == 1 && !isset($this->settings['CONTROLLERID'])) {
-            return json_encode($allControllersData[0]);
-        }
-
-        // Return all controllers data
         return json_encode(['controllers' => $allControllersData]);
     }
 
     /**
-     * Parses HBA statistics from storcli output
+     * Parse the output of `storcli64 /cX show all` and fill controllerData in-place.
      *
      * @param string $output
+     * @param array  $controllerData
      */
-    private function parseStatistics(string $output)
+    private function parseControllerShowAll(string $output, array &$controllerData): void
     {
         $lines = explode("\n", $output);
-        $currentSection = null;
 
+        // First pass: extract scalar fields (Serial Number, Firmware Version, ROC temperature).
         foreach ($lines as $line) {
             $line = trim($line);
 
-            // Skip empty lines and headers
-            if (empty($line) || preg_match('/Status Code|Status|Description|Number of Controllers/', $line)) {
+            if (preg_match('/^Serial Number\s*=\s*(.+)$/i', $line, $m)) {
+                $controllerData['serialno'] = trim($m[1]);
                 continue;
             }
 
-            // Look for controller section
-            if (preg_match('/^\s*\/\//', $line)) {
-                continue; // Skip comment lines
-            }
-
-            // Look for temperature line (format: ROC temperature(Degree Celsius) 51)
-            if (preg_match('/ROC temperature\(Degree Celsius\)\s*(\d+)/i', $line, $tempMatches)) {
-                $this->pageData['temperature'] = $tempMatches[1];
+            if (preg_match('/^Firmware Version\s*=\s*(.+)$/i', $line, $m)) {
+                $controllerData['firmware'] = trim($m[1]);
                 continue;
             }
 
-            if (preg_match('/^Host Controller/', $line)) {
-                $currentSection = 'controller';
+            if (preg_match('/ROC temperature\(Degree Celsius\)\s*=?\s*(\d+)/i', $line, $m)) {
+                $controllerData['temperature'] = $m[1];
                 continue;
-            }
-
-            if (preg_match('/^Drive /', $line)) {
-                $currentSection = 'drives';
-                continue;
-            }
-
-            if (preg_match('/^VD /', $line)) {
-                $currentSection = 'virtual_drives';
-                continue;
-            }
-
-            // Parse key-value pairs (standard format: key = value)
-            if (preg_match('/^(.+?)\s*=\s*(.+)$/', $line, $matches)) {
-                $key = strtolower(trim($matches[1]));
-                $value = trim($matches[2]);
-
-                // Map storcli output to our pageData
-                switch ($key) {
-                    case 'temperature':
-                    case 'roc temperature':
-                    case 'roc temperature(degree celsius)':
-                        $this->pageData['temperature'] = $value;
-                        break;
-                    case 'present':
-                        $this->pageData['present'] = $value;
-                        break;
-                    case 'missing':
-                        $this->pageData['missing'] = $value;
-                        break;
-                    case 'optimal':
-                        $this->pageData['optimal'] = $value;
-                        break;
-                    case 'failed':
-                    case 'fld':
-                        $this->pageData['failed'] = $value;
-                        break;
-                    case 'degraded':
-                    case 'dgrd':
-                        $this->pageData['degraded'] = $value;
-                        break;
-                    case 'offline':
-                    case 'offln':
-                        $this->pageData['offline'] = $value;
-                        break;
-                    case 'rebuild':
-                    case 'rbld':
-                        $this->pageData['rebuild'] = $value;
-                        break;
-                    case 'consistency':
-                    case 'chky':
-                        $this->pageData['consistency'] = $value;
-                        break;
-                    case 'predictive':
-                    case 'chkw':
-                        $this->pageData['predictive'] = $value;
-                        break;
-                    case 'background':
-                    case 'bgi':
-                        $this->pageData['background'] = $value;
-                        break;
-                }
             }
         }
 
-        // Basic controller info was already set in getStatistics()
-        // No need to reset it here
+        // Second pass: count physical drives by state.
+        // Each drive appears under a "Drive /cX/sY :" header followed by a brief
+        // table whose 3rd column is State (UGood, UBad, Onln, Offln, Rbld, ...).
+        // Also detect SMART alerts in each drive's "Drive .. State :" sub-block.
+        $present = 0;
+        $optimal = 0;
+        $failed = 0;
+        $offline = 0;
+        $rebuild = 0;
+        $predictive = 0;
+
+        $insideBriefTable = false;
+        $sawDriveHeaderForTable = false;
+        $insideStateSubBlock = false;
+
+        foreach ($lines as $line) {
+            $trim = trim($line);
+
+            // Brief one-drive table is preceded by a "Drive /cX/sY :" header,
+            // then a separator line of dashes, then the column header line
+            // "EID:Slt DID State DG ...", another separator, then a single data row.
+            if (preg_match('#^Drive /c\d+/s\d+\s*:\s*$#', $trim)) {
+                $sawDriveHeaderForTable = true;
+                $insideBriefTable = false;
+                $insideStateSubBlock = false;
+                continue;
+            }
+
+            if (preg_match('#^Drive /c\d+/s\d+ State\s*:\s*$#', $trim)) {
+                $insideStateSubBlock = true;
+                continue;
+            }
+
+            if ($insideStateSubBlock) {
+                if ($trim === '' || preg_match('#^Drive /c\d+/s\d+#', $trim)) {
+                    $insideStateSubBlock = false;
+                } elseif (preg_match('/^S\.M\.A\.R\.T alert flagged by drive\s*=\s*(\S+)/i', $trim, $m)) {
+                    if (strcasecmp(trim($m[1]), 'Yes') === 0) {
+                        $predictive++;
+                    }
+                    $insideStateSubBlock = false;
+                }
+            }
+
+            if ($sawDriveHeaderForTable && stripos($trim, 'EID:Slt') !== false && stripos($trim, 'State') !== false) {
+                $insideBriefTable = true;
+                continue;
+            }
+
+            if ($insideBriefTable) {
+                // Skip dashed separators.
+                if (strpos($trim, '----') === 0 || $trim === '') {
+                    // The first separator we encounter is before the data row; the
+                    // second one closes the table. We only count one row per drive
+                    // header, so toggle off after we've seen a data row.
+                    continue;
+                }
+
+                // Data row format (non-breaking spaces around EID may be empty):
+                //   :0  1 UGood -    14.552 TB SATA HDD - N 512B ST...  -
+                // After the EID:Slt token, columns are: DID, State, DG, Size, ...
+                $cols = preg_split('/\s+/', $trim);
+                if (count($cols) >= 3) {
+                    $state = $cols[2];
+                    $present++;
+                    switch (strtolower($state)) {
+                        case 'ugood':
+                        case 'onln':
+                        case 'jbod':
+                        case 'ghs':
+                        case 'dhs':
+                            $optimal++;
+                            break;
+                        case 'ubad':
+                        case 'failed':
+                        case 'fld':
+                            $failed++;
+                            break;
+                        case 'offln':
+                        case 'offline':
+                            $offline++;
+                            break;
+                        case 'rbld':
+                        case 'rebuild':
+                            $rebuild++;
+                            break;
+                    }
+                }
+
+                // Reset so we don't double-count from the same header.
+                $insideBriefTable = false;
+                $sawDriveHeaderForTable = false;
+            }
+        }
+
+        $controllerData['present']    = $present;
+        $controllerData['optimal']    = $optimal;
+        $controllerData['failed']     = $failed;
+        $controllerData['offline']    = $offline;
+        $controllerData['rebuild']    = $rebuild;
+        $controllerData['predictive'] = $predictive;
+        // missing/degraded/consistency/background do not map to IT-mode HBAs.
     }
 }

@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "hbastat">
 <!ENTITY author    "YourName">
-<!ENTITY version   "2026.06.04-final">
+<!ENTITY version   "2026.06.05-multicontroller">
 <!ENTITY launch    "Settings/HBASettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/YourName/hbastat-unraid/master">
 <!ENTITY pluginURL "&gitURL;/&name;.plg">
@@ -47,6 +47,14 @@
 -->
 
 <CHANGES>
+###2026.06.05-multicontroller
+- Multi-controller dashboard support:
+  * Dashboard now renders one stacked block per detected controller
+  * Per-controller storcli64 /cN show all parser pulls Serial Number, Firmware Version, ROC temperature, and physical-drive state counts (UGood/UBad/Onln/Offln/Rbld + SMART alert)
+  * Settings page enumerates detected controllers; each gets its own "Show on Dashboard" toggle and its own block of poller toggles (DISP*_N)
+  * Old single CONTROLLERID selector removed; replaced with per-controller SHOWCTRL_N
+  * Fixed broken JS string-concatenation in scripts/hbastat.js that prevented the multi-controller path from rendering
+
 ###2026-06.04-final
 - Final working release with all issues resolved:
   * Fixed PHP fatal error by adding missing Error.php class and proper includes
@@ -103,9 +111,8 @@ fi
 <FILE Name="/boot/config/plugins/hbastat/hbastat.cfg">
 <INLINE>
  <![CDATA[
-  STORCLI_PATH=storcli
+  STORCLI_PATH="storcli64"
   VENDOR=""
-  CONTROLLERID=""
   TEMPFORMAT="C"
   DISPSTATUS="1"
   DISPTemperature="1"
