@@ -89,30 +89,30 @@ EOT;
 
 $rows_html = '';
 if ($pluginConfigured && !empty($visibleControllers)) {
-    $colsHtml = '<span class="w40">Controller</span>';
-    if ($colStatus) $colsHtml .= '<span class="w20">Status</span>';
-    if ($colTemp)   $colsHtml .= '<span class="w20">Temp</span>';
-    if ($colSmart)  $colsHtml .= '<span class="w20">SMART</span>';
-    if ($colDrives) $colsHtml .= '<span class="w20">Drives</span>';
+    $colsHtml = '<span class="w26">Controller</span>';
+    if ($colStatus) $colsHtml .= '<span class="w18">Status</span>';
+    if ($colTemp)   $colsHtml .= '<span class="w18">Temp</span>';
+    if ($colSmart)  $colsHtml .= '<span class="w18">SMART</span>';
+    if ($colDrives) $colsHtml .= '<span class="w18">Drives</span>';
 
     $rows_html .= "<tr class=\"header\"><td>{$colsHtml}</td></tr>";
 
     foreach ($visibleControllers as $cid) {
         $cid_esc = htmlspecialchars($cid);
         $rowParts = [
-            "<span class=\"w40\"><i class=\"icon-hardware f14\"></i> <a href=\"/Dashboard/Settings/HBASettings\" title=\"Controller {$cid_esc} settings\">Ctl {$cid_esc} <span class=\"hba-product-{$cid}\"></span></a></span>"
+            "<span class=\"w26\"><i class=\"icon-hardware f14\"></i> <a href=\"/Dashboard/Settings/HBASettings\" title=\"Controller {$cid_esc} settings\">Ctl {$cid_esc} <span class=\"hba-product-{$cid}\"></span></a></span>"
         ];
         if ($colStatus) {
-            $rowParts[] = "<span class=\"w20\"><i class=\"fa fa-circle orb hba-status-orb-{$cid} middle\"></i><span class=\"hba-status-text-{$cid}\">&hellip;</span></span>";
+            $rowParts[] = "<span class=\"w18\"><i class=\"fa fa-circle orb hba-status-orb-{$cid} middle\"></i><span class=\"hba-status-text-{$cid}\">&hellip;</span></span>";
         }
         if ($colTemp) {
-            $rowParts[] = "<span class=\"w20\"><span class=\"hba-temperature-{$cid}\">&hellip;</span></span>";
+            $rowParts[] = "<span class=\"w18\"><span class=\"hba-temperature-{$cid}\">&hellip;</span></span>";
         }
         if ($colSmart) {
-            $rowParts[] = "<span class=\"w20\"><span class=\"hba-smart-icon-{$cid} fa fa-thumbs-o-up green-text\" style=\"margin-right:6px\"></span><span class=\"hba-smart-text-{$cid}\">&hellip;</span></span>";
+            $rowParts[] = "<span class=\"w18\"><span class=\"hba-smart-icon-{$cid} fa fa-thumbs-o-up green-text\" style=\"margin-right:6px\"></span><span class=\"hba-smart-text-{$cid}\">&hellip;</span></span>";
         }
         if ($colDrives) {
-            $rowParts[] = "<span class=\"w20\"><span class=\"hba-drives-{$cid}\">&hellip;</span></span>";
+            $rowParts[] = "<span class=\"w18\"><span class=\"hba-drives-{$cid}\">&hellip;</span></span>";
         }
         $rows_html .= "<tr class=\"updated\"><td>" . implode('', $rowParts) . "</td></tr>";
     }
