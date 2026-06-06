@@ -27,8 +27,8 @@ Title="HBA Statistics"
   SOFTWARE.
 */
 
-require_once __DIR__ . '/lib/Main.php';
-require_once __DIR__ . '/lib/Hba.php';
+require_once '/usr/local/emhttp/plugins/hbastat/lib/Main.php';
+require_once '/usr/local/emhttp/plugins/hbastat/lib/Hba.php';
 
 use hbastat\lib\Hba;
 
