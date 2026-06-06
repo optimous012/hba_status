@@ -117,8 +117,6 @@ class Main
         $this->cmdexists = false;
         // Check if vendor utility is available
         $this->runCommand(self::COMMAND_EXISTS_CHECKER, $utility, false);
-        // When checking for existence of the command, we want the return to be NULL
-        file_put_contents("/tmp/hbastat_debug.txt", "Checking command: {$utility}\nResult: '" . $this->stdout . "'\n---\n", FILE_APPEND);
         if (!empty($this->stdout)) {
             $this->cmdexists = true;
         } else {
