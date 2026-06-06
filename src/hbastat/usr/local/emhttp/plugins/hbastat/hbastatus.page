@@ -191,6 +191,9 @@ function hba_disp(array $cfg, string $base, string $ctlId, string $default = '1'
     </tbody>
 <?php endforeach; endif; ?>
 </table>
+<script type="text/javascript">
+    window.HBASTAT_TEMP_FORMAT = "<?=htmlspecialchars($hbastat_cfg['TEMPFORMAT'] ?? 'C', ENT_QUOTES);?>";
+</script>
 <script type="text/javascript" src="/plugins/hbastat/scripts/hbastat.js"></script>
 <script type="text/javascript">
     $(hbastat_status);

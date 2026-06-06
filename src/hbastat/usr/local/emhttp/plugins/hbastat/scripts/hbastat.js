@@ -23,25 +23,37 @@
 */
 
 // ROC junction-temperature thresholds (°C) for SAS3008-class HBAs.
+// Thresholds stay in °C regardless of the user's display unit so the warning
+// bands don't shift when units are toggled.
 var HBA_TEMP_WARN = 60;
 var HBA_TEMP_CRIT = 70;
 
-function hbastat_tempClass(t) {
-    var n = parseInt(t, 10);
-    if (isNaN(n)) return '';
-    if (n >= HBA_TEMP_CRIT) return 'red-text';
-    if (n >= HBA_TEMP_WARN) return 'orange-text';
+function hbastat_tempClassC(celsius) {
+    if (isNaN(celsius)) return '';
+    if (celsius >= HBA_TEMP_CRIT) return 'red-text';
+    if (celsius >= HBA_TEMP_WARN) return 'orange-text';
     return 'green-text';
 }
 
-function hbastat_paintTemp($el, value) {
+function hbastat_paintTemp($el, valueCelsius) {
     $el.removeClass('green-text orange-text red-text');
-    if (value === undefined || value === null || value === '' || value === 'N/A') {
+    if (valueCelsius === undefined || valueCelsius === null || valueCelsius === '' || valueCelsius === 'N/A') {
         $el.text('—');
         return;
     }
-    $el.addClass(hbastat_tempClass(value));
-    $el.text(value + ' °C');
+    var c = parseFloat(valueCelsius);
+    if (isNaN(c)) {
+        $el.text('—');
+        return;
+    }
+    $el.addClass(hbastat_tempClassC(c));
+    var fmt = (window.HBASTAT_TEMP_FORMAT || 'C').toUpperCase();
+    if (fmt === 'F') {
+        var f = Math.round(c * 9 / 5 + 32);
+        $el.text(f + ' °F');
+    } else {
+        $el.text(Math.round(c) + ' °C');
+    }
 }
 
 function hbastat_paintStatus(id, ctl) {
