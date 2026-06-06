@@ -26,8 +26,6 @@
 
 namespace hbastat\lib;
 
-use SimpleXMLElement;
-
 /**
  * Class Hba
  * @package hbastat\lib
@@ -35,6 +33,12 @@ use SimpleXMLElement;
 class Hba extends Main
 {
     const INVENTORY_PARAM = 'show';
+
+    /** Where slow-changing per-controller info (serial, firmware, drive states) is cached. */
+    const CACHE_FILE = '/var/tmp/hbastat_cache.json';
+
+    /** Default cold-cache TTL (seconds) if the cfg doesn't override it. */
+    const DEFAULT_COLD_TTL_SEC = 300;
 
     /**
      * Vendor ID → human-readable name map.
@@ -84,7 +88,7 @@ class Hba extends Main
     }
 
     /**
-     * Retrieves HBA controller inventory and parses into an array
+     * Retrieves HBA controller inventory and parses into an array.
      *
      * @return array
      */
@@ -134,188 +138,221 @@ class Hba extends Main
     }
 
     /**
-     * Retrieves HBA controller statistics for every detected controller.
+     * Hot path. Returns the per-controller payload as JSON.
+     *
+     * On each call we only run `/cN show temperature` (sub-second). Everything
+     * else — serial, firmware, drive state counts — comes from the cold cache,
+     * which is regenerated at most every COLD_TTL_SEC seconds.
      *
      * @return string JSON
      */
     public function getStatistics()
     {
-        $controllers = $this->getInventory();
+        $cold = $this->getOrRefreshColdCache();
 
-        if (empty($controllers)) {
+        if (empty($cold['controllers'])) {
             $this->pageData['error'][] = 'No HBA controllers found';
             return json_encode($this->pageData);
         }
 
-        $allControllersData = [];
-
-        foreach ($controllers as $controller) {
-            $id = $controller['id'];
-
-            $controllerData = [
-                'controller'  => $id,
-                'vendor'      => $controller['vendor'] ?? 'Unknown',
-                'product'     => $controller['model'] ?? 'Unknown',
-                'serialno'    => 'N/A',
-                'firmware'    => 'N/A',
-                'temperature' => 'N/A',
-                'present'     => 0,
-                'missing'     => 0,
-                'optimal'     => 0,
-                'failed'      => 0,
-                'degraded'    => 0,
-                'offline'     => 0,
-                'rebuild'     => 0,
-                'consistency' => 0,
-                'predictive'  => 0,
-                'background'  => 0,
-            ];
-
-            $this->runCommand($this->settings['cmd'], "/c{$id} show all", false);
-
-            if (!empty($this->stdout)) {
-                $this->parseControllerShowAll($this->stdout, $controllerData);
-            } else {
-                $controllerData['error'] = 'Failed to retrieve HBA statistics';
-            }
-
-            $allControllersData[] = $controllerData;
+        $out = [];
+        foreach ($cold['controllers'] as $cached) {
+            $tempC = $this->fetchTemperatureC((string)$cached['controller']);
+            $entry = $cached;
+            $entry['temperature'] = $tempC === null ? 'N/A' : (string)$tempC;
+            $out[] = $entry;
         }
 
-        return json_encode(['controllers' => $allControllersData]);
+        return json_encode(['controllers' => $out]);
     }
 
     /**
-     * Parse the output of `storcli64 /cX show all` and fill controllerData in-place.
-     *
-     * @param string $output
-     * @param array  $controllerData
+     * Read the cache file if it exists and is within TTL; otherwise rebuild it.
      */
-    private function parseControllerShowAll(string $output, array &$controllerData): void
+    private function getOrRefreshColdCache(): array
     {
-        $lines = explode("\n", $output);
+        $ttl = (int)($this->settings['COLD_TTL_SEC'] ?? self::DEFAULT_COLD_TTL_SEC);
+        if ($ttl < 30) $ttl = 30;
 
-        // First pass: extract scalar fields (Serial Number, Firmware Version, ROC temperature).
-        foreach ($lines as $line) {
-            $line = trim($line);
-
-            if (preg_match('/^Serial Number\s*=\s*(.+)$/i', $line, $m)) {
-                $controllerData['serialno'] = trim($m[1]);
-                continue;
+        if (is_file(self::CACHE_FILE)) {
+            $age = time() - filemtime(self::CACHE_FILE);
+            if ($age < $ttl) {
+                $raw = @file_get_contents(self::CACHE_FILE);
+                $decoded = $raw === false ? null : json_decode($raw, true);
+                if (is_array($decoded) && !empty($decoded['controllers'])) {
+                    return $decoded;
+                }
             }
+        }
 
-            if (preg_match('/^Firmware Version\s*=\s*(.+)$/i', $line, $m)) {
-                $controllerData['firmware'] = trim($m[1]);
-                continue;
-            }
+        return $this->refreshColdCache();
+    }
 
+    /**
+     * Run the cold-path storcli calls and rebuild the cache file.
+     *
+     * Cold = data that rarely changes:
+     *   - Controller identity (vendor, product) from inventory
+     *   - Serial Number + Firmware Version from `/cN show`
+     *   - Physical drive state counts from `/cN/eall/sall show` (brief table)
+     */
+    private function refreshColdCache(): array
+    {
+        $controllers = $this->getInventory();
+        $payload = [
+            'generated_at' => time(),
+            'controllers'  => [],
+        ];
+
+        foreach ($controllers as $c) {
+            $id = (string)$c['id'];
+
+            $info = $this->fetchControllerInfo($id);
+            $drives = $this->fetchDriveStates($id);
+
+            $payload['controllers'][] = array_merge([
+                'controller' => $id,
+                'vendor'     => $c['vendor']    ?? 'Unknown',
+                'product'    => $c['model']     ?? 'Unknown',
+                'serialno'   => $info['serial']   ?? 'N/A',
+                'firmware'   => $info['firmware'] ?? 'N/A',
+            ], $drives);
+        }
+
+        @file_put_contents(self::CACHE_FILE, json_encode($payload));
+        return $payload;
+    }
+
+    /**
+     * Hot poll. Returns the ROC temperature in °C as an int, or null on failure.
+     */
+    private function fetchTemperatureC(string $id): ?int
+    {
+        $this->runCommand($this->settings['cmd'], "/c{$id} show temperature", false);
+        if (empty($this->stdout)) {
+            return null;
+        }
+        foreach (explode("\n", $this->stdout) as $line) {
             if (preg_match('/ROC temperature\(Degree Celsius\)\s*=?\s*(\d+)/i', $line, $m)) {
-                $controllerData['temperature'] = $m[1];
+                return (int)$m[1];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Pull Serial Number + Firmware Version from `/cN show` (much smaller than `show all`).
+     *
+     * @return array{serial:string,firmware:string}
+     */
+    private function fetchControllerInfo(string $id): array
+    {
+        $serial = 'N/A';
+        $firmware = 'N/A';
+
+        $this->runCommand($this->settings['cmd'], "/c{$id} show", false);
+        if (empty($this->stdout)) {
+            return ['serial' => $serial, 'firmware' => $firmware];
+        }
+
+        foreach (explode("\n", $this->stdout) as $line) {
+            $t = trim($line);
+            if (preg_match('/^Serial Number\s*=\s*(.+)$/i', $t, $m)) {
+                $serial = trim($m[1]);
+            } elseif (preg_match('/^Firmware Version\s*=\s*(.+)$/i', $t, $m)) {
+                $firmware = trim($m[1]);
+            }
+        }
+        return ['serial' => $serial, 'firmware' => $firmware];
+    }
+
+    /**
+     * Parse the brief physical-drive table from `/cN/eall/sall show`.
+     *
+     * The table looks like:
+     *   EID:Slt DID State DG       Size Intf Med SED PI SeSz Model           Sp
+     *    :0       1 UGood -    14.552 TB SATA HDD - N  512B ST...             -
+     *
+     * Predictive count is approximated from UBad/Failed state in the brief
+     * table — getting the per-drive SMART alert flag would require the
+     * verbose `show all` per drive, which defeats the point of the cold-path
+     * simplification.
+     *
+     * @return array<string,int>
+     */
+    private function fetchDriveStates(string $id): array
+    {
+        $counts = [
+            'present'     => 0,
+            'optimal'     => 0,
+            'failed'      => 0,
+            'offline'     => 0,
+            'rebuild'     => 0,
+            'predictive'  => 0,
+            'missing'     => 0,
+            'degraded'    => 0,
+            'consistency' => 0,
+            'background'  => 0,
+        ];
+
+        $this->runCommand($this->settings['cmd'], "/c{$id}/eall/sall show", false);
+        if (empty($this->stdout)) {
+            return $counts;
+        }
+
+        $insideTable = false;
+        foreach (explode("\n", $this->stdout) as $line) {
+            $t = trim($line);
+
+            if (stripos($t, 'EID:Slt') !== false && stripos($t, 'State') !== false) {
+                $insideTable = true;
                 continue;
+            }
+            if (!$insideTable) {
+                continue;
+            }
+            // End of table: a legend row like "EID-Enclosure Device ID|..."
+            if (preg_match('/^(EID|UGood|Med|SeSz|DG)-/', $t)) {
+                $insideTable = false;
+                continue;
+            }
+            // Skip separators and blank lines.
+            if (strpos($t, '----') === 0 || $t === '') {
+                continue;
+            }
+
+            $cols = preg_split('/\s+/', $t);
+            if (count($cols) < 3) {
+                continue;
+            }
+
+            $state = strtolower($cols[2]);
+            $counts['present']++;
+            switch ($state) {
+                case 'ugood':
+                case 'onln':
+                case 'jbod':
+                case 'ghs':
+                case 'dhs':
+                    $counts['optimal']++;
+                    break;
+                case 'ubad':
+                case 'failed':
+                case 'fld':
+                    $counts['failed']++;
+                    $counts['predictive']++;
+                    break;
+                case 'offln':
+                case 'offline':
+                    $counts['offline']++;
+                    break;
+                case 'rbld':
+                case 'rebuild':
+                    $counts['rebuild']++;
+                    break;
             }
         }
 
-        // Second pass: count physical drives by state.
-        // Each drive appears under a "Drive /cX/sY :" header followed by a brief
-        // table whose 3rd column is State (UGood, UBad, Onln, Offln, Rbld, ...).
-        // Also detect SMART alerts in each drive's "Drive .. State :" sub-block.
-        $present = 0;
-        $optimal = 0;
-        $failed = 0;
-        $offline = 0;
-        $rebuild = 0;
-        $predictive = 0;
-
-        $insideBriefTable = false;
-        $sawDriveHeaderForTable = false;
-        $insideStateSubBlock = false;
-
-        foreach ($lines as $line) {
-            $trim = trim($line);
-
-            // Brief one-drive table is preceded by a "Drive /cX/sY :" header,
-            // then a separator line of dashes, then the column header line
-            // "EID:Slt DID State DG ...", another separator, then a single data row.
-            if (preg_match('#^Drive /c\d+/s\d+\s*:\s*$#', $trim)) {
-                $sawDriveHeaderForTable = true;
-                $insideBriefTable = false;
-                $insideStateSubBlock = false;
-                continue;
-            }
-
-            if (preg_match('#^Drive /c\d+/s\d+ State\s*:\s*$#', $trim)) {
-                $insideStateSubBlock = true;
-                continue;
-            }
-
-            if ($insideStateSubBlock) {
-                if ($trim === '' || preg_match('#^Drive /c\d+/s\d+#', $trim)) {
-                    $insideStateSubBlock = false;
-                } elseif (preg_match('/^S\.M\.A\.R\.T alert flagged by drive\s*=\s*(\S+)/i', $trim, $m)) {
-                    if (strcasecmp(trim($m[1]), 'Yes') === 0) {
-                        $predictive++;
-                    }
-                    $insideStateSubBlock = false;
-                }
-            }
-
-            if ($sawDriveHeaderForTable && stripos($trim, 'EID:Slt') !== false && stripos($trim, 'State') !== false) {
-                $insideBriefTable = true;
-                continue;
-            }
-
-            if ($insideBriefTable) {
-                // Skip dashed separators.
-                if (strpos($trim, '----') === 0 || $trim === '') {
-                    // The first separator we encounter is before the data row; the
-                    // second one closes the table. We only count one row per drive
-                    // header, so toggle off after we've seen a data row.
-                    continue;
-                }
-
-                // Data row format (non-breaking spaces around EID may be empty):
-                //   :0  1 UGood -    14.552 TB SATA HDD - N 512B ST...  -
-                // After the EID:Slt token, columns are: DID, State, DG, Size, ...
-                $cols = preg_split('/\s+/', $trim);
-                if (count($cols) >= 3) {
-                    $state = $cols[2];
-                    $present++;
-                    switch (strtolower($state)) {
-                        case 'ugood':
-                        case 'onln':
-                        case 'jbod':
-                        case 'ghs':
-                        case 'dhs':
-                            $optimal++;
-                            break;
-                        case 'ubad':
-                        case 'failed':
-                        case 'fld':
-                            $failed++;
-                            break;
-                        case 'offln':
-                        case 'offline':
-                            $offline++;
-                            break;
-                        case 'rbld':
-                        case 'rebuild':
-                            $rebuild++;
-                            break;
-                    }
-                }
-
-                // Reset so we don't double-count from the same header.
-                $insideBriefTable = false;
-                $sawDriveHeaderForTable = false;
-            }
-        }
-
-        $controllerData['present']    = $present;
-        $controllerData['optimal']    = $optimal;
-        $controllerData['failed']     = $failed;
-        $controllerData['offline']    = $offline;
-        $controllerData['rebuild']    = $rebuild;
-        $controllerData['predictive'] = $predictive;
-        // missing/degraded/consistency/background do not map to IT-mode HBAs.
+        return $counts;
     }
 }
