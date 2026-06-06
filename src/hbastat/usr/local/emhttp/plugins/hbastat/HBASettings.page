@@ -65,11 +65,33 @@ if (count($_POST)) {
   $cfg = NULL ;
   if ($_POST['#apply'] == "_(Apply)_") {
     array_map(function($k, $v) use (&$cfg) { if($k[0] != "#") $cfg[$k] = $v; }, array_keys($_POST), $_POST );
+    // Thresholds in the form are in the user's chosen unit; store canonical °C.
+    $postFmt = strtoupper((string)($cfg['TEMPFORMAT'] ?? 'C'));
+    foreach (['TEMP_WARN', 'TEMP_CRIT'] as $key) {
+      if (isset($cfg[$key]) && $cfg[$key] !== '') {
+        $val = (int)$cfg[$key];
+        if ($postFmt === 'F') {
+          $cfg[$key] = (int)round(($val - 32) * 5 / 9);
+        }
+      }
+    }
     save_cfg($cfg);
     $hbastat_cfg = parse_plugin_cfg("hbastat", true);
     unset($_POST) ;
   }
 }
+
+// Display thresholds in the chosen unit (cfg always stores °C).
+$tempFmt = strtoupper((string)($hbastat_cfg['TEMPFORMAT'] ?? 'C'));
+$unitLabel = $tempFmt === 'F' ? '°F' : '°C';
+$cToDisplay = function (int $c) use ($tempFmt): int {
+    return $tempFmt === 'F' ? (int)round($c * 9 / 5 + 32) : $c;
+};
+$displayWarn   = $cToDisplay((int)($hbastat_cfg['TEMP_WARN'] ?? 60));
+$displayCrit   = $cToDisplay((int)($hbastat_cfg['TEMP_CRIT'] ?? 70));
+$placeWarn     = $tempFmt === 'F' ? 140 : 60;
+$placeCrit     = $tempFmt === 'F' ? 158 : 70;
+$rangeMaxValue = $tempFmt === 'F' ? 392 : 200;
 
 $detected = [];
 try {
@@ -91,7 +113,31 @@ function hba_show_val(array $cfg, string $ctlId): string {
 ?>
 <script>
 $(function() {
-  // Any specific JS for HBA settings can go here
+  var $fmt = $('#TEMPFORMAT');
+  $fmt.data('previous', $fmt.val());
+
+  $fmt.on('change', function() {
+    var newFmt = $(this).val();
+    var oldFmt = $(this).data('previous');
+    $(this).data('previous', newFmt);
+    if (newFmt === oldFmt) return;
+
+    // Update unit labels in the threshold rows so the user sees the new unit
+    // even before clicking Apply.
+    var newLabel = newFmt === 'F' ? '°F' : '°C';
+    $('.hba-temp-unit-label').text(newLabel);
+
+    ['TEMP_WARN', 'TEMP_CRIT'].forEach(function(name) {
+      var $input = $('input[name="' + name + '"]');
+      var val = parseInt($input.val(), 10);
+      if (isNaN(val)) return;
+      if (oldFmt === 'C' && newFmt === 'F') {
+        $input.val(Math.round(val * 9 / 5 + 32));
+      } else if (oldFmt === 'F' && newFmt === 'C') {
+        $input.val(Math.round((val - 32) * 5 / 9));
+      }
+    });
+  });
 });
 </script>
 
@@ -128,13 +174,13 @@ $(function() {
     <input type="number" name="UIREFRESHINT" class="narrow" min="2000" maxlength="5" value="<?=$hbastat_cfg['UIREFRESHINT'] ?? '5000';?>" placeholder="5000">
 
   <h2><b>Temperature Thresholds &amp; Notifications</b></h2>
-  <small>Thresholds are entered in degrees Celsius. The dashboard always evaluates against °C even when displayed as °F.</small><br><br>
+  <small>Thresholds use the unit selected in <i>Temperature Format</i> above. Values are stored canonically as °C, so changing the format converts existing thresholds rather than reinterpreting them.</small><br><br>
 
-  Warning Threshold (°C, turns text orange):
-  : <input type="number" name="TEMP_WARN" class="narrow" min="0" max="200" value="<?=(int)($hbastat_cfg['TEMP_WARN'] ?? 60);?>" placeholder="60">
+  Warning Threshold (<span class="hba-temp-unit-label"><?=$unitLabel?></span>, turns text orange):
+  : <input type="number" name="TEMP_WARN" class="narrow" min="0" max="<?=$rangeMaxValue?>" value="<?=$displayWarn?>" placeholder="<?=$placeWarn?>">
 
-  Critical Threshold (°C, turns text red &amp; triggers notification):
-  : <input type="number" name="TEMP_CRIT" class="narrow" min="0" max="200" value="<?=(int)($hbastat_cfg['TEMP_CRIT'] ?? 70);?>" placeholder="70">
+  Critical Threshold (<span class="hba-temp-unit-label"><?=$unitLabel?></span>, turns text red &amp; triggers notification):
+  : <input type="number" name="TEMP_CRIT" class="narrow" min="0" max="<?=$rangeMaxValue?>" value="<?=$displayCrit?>" placeholder="<?=$placeCrit?>">
 
   Send Unraid Notification at Critical Threshold:
   : <select id="NOTIFY_ENABLE" name="NOTIFY_ENABLE" size="1">
