@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "hbastat">
 <!ENTITY author    "YourName">
-<!ENTITY version   "2026.06.05-multicontroller">
+<!ENTITY version   "2026.06.05-unified-tile">
 <!ENTITY launch    "Settings/HBASettings">
 <!ENTITY gitURL    "https://raw.githubusercontent.com/YourName/hbastat-unraid/master">
 <!ENTITY pluginURL "&gitURL;/&name;.plg">
@@ -47,6 +47,13 @@
 -->
 
 <CHANGES>
+###2026.06.05-unified-tile
+- Single half-width tile holding all controllers as compact rows (matches standard Unraid dashboard tile structure: `<div class="tile">` + `<table class="dashboard">`)
+- Promoted per-controller poller toggles to global column toggles (Status / Temperature / SMART / Drives)
+- Added configurable Warning + Critical temperature thresholds (in °C); critical also tints the row's status to "over-temp"
+- Added optional Unraid notification when any controller crosses the critical threshold, with a per-controller cooldown that auto-resets when the controller cools back below crit
+- Temperature now honors the Celsius / Fahrenheit cfg setting at display time; thresholds stay in °C so warning bands don't shift on unit toggle
+
 ###2026.06.05-multicontroller
 - Multi-controller dashboard support:
   * Dashboard now renders one stacked block per detected controller
@@ -114,6 +121,10 @@ fi
   STORCLI_PATH="storcli64"
   VENDOR=""
   TEMPFORMAT="C"
+  TEMP_WARN="60"
+  TEMP_CRIT="70"
+  NOTIFY_ENABLE="0"
+  NOTIFY_COOLDOWN_MIN="60"
   DISPSTATUS="1"
   DISPTemperature="1"
   DISPPresent="1"

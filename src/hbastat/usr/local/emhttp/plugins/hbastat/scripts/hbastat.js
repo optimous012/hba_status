@@ -22,16 +22,16 @@
   SOFTWARE.
 */
 
-// ROC junction-temperature thresholds (°C) for SAS3008-class HBAs.
-// Thresholds stay in °C regardless of the user's display unit so the warning
-// bands don't shift when units are toggled.
-var HBA_TEMP_WARN = 60;
-var HBA_TEMP_CRIT = 70;
+// Thresholds and unit are injected by hbastatus.page from cfg. Fallbacks here
+// mirror default.cfg in case the page didn't set them.
+function hbastat_warnC()  { return window.HBASTAT_TEMP_WARN  || 60; }
+function hbastat_critC()  { return window.HBASTAT_TEMP_CRIT  || 70; }
+function hbastat_fmt()    { return (window.HBASTAT_TEMP_FORMAT || 'C').toUpperCase(); }
 
 function hbastat_tempClassC(celsius) {
     if (isNaN(celsius)) return '';
-    if (celsius >= HBA_TEMP_CRIT) return 'red-text';
-    if (celsius >= HBA_TEMP_WARN) return 'orange-text';
+    if (celsius >= hbastat_critC()) return 'red-text';
+    if (celsius >= hbastat_warnC()) return 'orange-text';
     return 'green-text';
 }
 
@@ -42,15 +42,10 @@ function hbastat_paintTemp($el, valueCelsius) {
         return;
     }
     var c = parseFloat(valueCelsius);
-    if (isNaN(c)) {
-        $el.text('—');
-        return;
-    }
+    if (isNaN(c)) { $el.text('—'); return; }
     $el.addClass(hbastat_tempClassC(c));
-    var fmt = (window.HBASTAT_TEMP_FORMAT || 'C').toUpperCase();
-    if (fmt === 'F') {
-        var f = Math.round(c * 9 / 5 + 32);
-        $el.text(f + ' °F');
+    if (hbastat_fmt() === 'F') {
+        $el.text(Math.round(c * 9 / 5 + 32) + ' °F');
     } else {
         $el.text(Math.round(c) + ' °C');
     }
@@ -61,17 +56,20 @@ function hbastat_paintStatus(id, ctl) {
     var offline = parseInt(ctl.offline, 10) || 0;
     var predictive = parseInt(ctl.predictive, 10) || 0;
     var rebuild = parseInt(ctl.rebuild, 10) || 0;
+    var tempC = parseFloat(ctl.temperature);
+    var overTemp = !isNaN(tempC) && tempC >= hbastat_critC();
 
     var orb, text;
-    if (failed > 0 || offline > 0) {
-        orb = 'red-orb'; text = 'fault';
+    if (failed > 0 || offline > 0 || overTemp) {
+        orb = 'red-orb'; text = overTemp && failed === 0 && offline === 0 ? 'over-temp' : 'fault';
     } else if (predictive > 0 || rebuild > 0) {
         orb = 'orange-orb'; text = 'warning';
     } else {
         orb = 'green-orb'; text = 'active';
     }
-    var $orb = $('.hba-status-orb-' + id);
-    $orb.removeClass('green-orb orange-orb red-orb').addClass(orb);
+    $('.hba-status-orb-' + id)
+        .removeClass('green-orb orange-orb red-orb')
+        .addClass(orb);
     $('.hba-status-text-' + id).text(text);
 }
 
@@ -82,7 +80,7 @@ function hbastat_paintSmart(id, ctl) {
     $icon.removeClass('fa-thumbs-o-up fa-thumbs-o-down green-text red-text');
     if (predictive > 0) {
         $icon.addClass('fa-thumbs-o-down red-text');
-        $text.text(predictive + ' SMART alert' + (predictive === 1 ? '' : 's'));
+        $text.text(predictive + ' alert' + (predictive === 1 ? '' : 's'));
     } else {
         $icon.addClass('fa-thumbs-o-up green-text');
         $text.text('healthy');
@@ -93,12 +91,9 @@ function hbastat_paintDrives(id, ctl) {
     var present = parseInt(ctl.present, 10);
     var optimal = parseInt(ctl.optimal, 10);
     var $el = $('.hba-drives-' + id);
-    if (isNaN(present)) {
-        $el.text('—');
-        return;
-    }
+    if (isNaN(present)) { $el.text('—'); return; }
     if (!isNaN(optimal)) {
-        $el.text(optimal + '/' + present + ' optimal');
+        $el.text(optimal + '/' + present);
     } else {
         $el.text(present);
     }
@@ -123,38 +118,12 @@ function hbastat_status() {
                 }
             });
 
-            ['present', 'missing', 'optimal', 'failed', 'degraded',
-             'offline', 'rebuild', 'consistency', 'predictive', 'background'
-            ].forEach(function(f) {
-                if (ctl[f] !== undefined && ctl[f] !== null) {
-                    $('.hba-' + f + '-' + id).text(ctl[f]);
-                }
-            });
-
             hbastat_paintTemp($('.hba-temperature-' + id), ctl.temperature);
             hbastat_paintStatus(id, ctl);
             hbastat_paintSmart(id, ctl);
             hbastat_paintDrives(id, ctl);
-
-            // Reveal the "— Firmware X" suffix in the tile header once we have data.
-            if (ctl.firmware && ctl.firmware !== 'N/A') {
-                $('.hba-header-sep-' + id + ', .hba-firmware-label-' + id).show();
-            }
         });
     }).fail(function() {
-        $('[class*="hba-"]').filter(function() {
-            return $(this).is('span') && !$(this).hasClass('tile-header');
-        }).text('N/A');
+        $('[class*="hba-status-text-"]').text('error');
     });
-}
-
-function hbastat_dash() {
-    var box = $('.dash_hbastat');
-    if (box.length) {
-        if (box.is(':visible')) {
-            box.hide();
-        } else {
-            box.show();
-        }
-    }
 }

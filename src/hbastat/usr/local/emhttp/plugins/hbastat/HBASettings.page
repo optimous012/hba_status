@@ -71,8 +71,6 @@ if (count($_POST)) {
   }
 }
 
-// Detect controllers via storcli inventory. Falls back to a generic 0/1 list
-// so the user can still configure the plugin if storcli is unreachable.
 $detected = [];
 try {
     $detected = (new Hba($hbastat_cfg))->getInventory();
@@ -86,32 +84,9 @@ if (empty($detected)) {
     ];
 }
 
-// Per-controller poller fields. Key = cfg suffix, Label = display label.
-$pollerFields = [
-    'DISPSTATUS'      => 'Status',
-    'DISPTemperature' => 'Temperature',
-    'DISPPresent'     => 'Present Drives',
-    'DISPMissng'      => 'Missing Drives',
-    'DISPOptl'        => 'Optimal Drives',
-    'DISPDgrd'        => 'Failed Drives',
-    'DISPDdff'        => 'Degraded Drives',
-    'DISPOnLn'        => 'Offline Drives',
-    'DISPRbld'        => 'Rebuild Operations',
-    'DISPChky'        => 'Consistency Check',
-    'DISPChkp'        => 'Predictive Failure',
-    'DISPBlk'         => 'Background Operations',
-];
-
-// Helper: per-controller value with fallback to the global key, then to "1".
-function hba_cfg_val(array $cfg, string $base, string $ctlId, string $default = '1'): string {
-    $perCtl = $base . '_' . $ctlId;
-    if (isset($cfg[$perCtl]) && $cfg[$perCtl] !== '') {
-        return (string)$cfg[$perCtl];
-    }
-    if (isset($cfg[$base]) && $cfg[$base] !== '') {
-        return (string)$cfg[$base];
-    }
-    return $default;
+function hba_show_val(array $cfg, string $ctlId): string {
+    $perCtl = 'SHOWCTRL_' . $ctlId;
+    return isset($cfg[$perCtl]) && $cfg[$perCtl] !== '' ? (string)$cfg[$perCtl] : '1';
 }
 ?>
 <script>
@@ -152,37 +127,68 @@ $(function() {
     </select>
     <input type="number" name="UIREFRESHINT" class="narrow" min="2000" maxlength="5" value="<?=$hbastat_cfg['UIREFRESHINT'] ?? '5000';?>" placeholder="5000">
 
-  <h2><b>Detected Controllers</b></h2>
-  <small>Toggle each controller's visibility on the Dashboard and pick which fields to display for it.</small>
-  <br><br>
+  <h2><b>Temperature Thresholds &amp; Notifications</b></h2>
+  <small>Thresholds are entered in degrees Celsius. The dashboard always evaluates against °C even when displayed as °F.</small><br><br>
 
-<?php foreach ($detected as $ctl): ?>
-<?php
+  Warning Threshold (°C, turns text orange):
+  : <input type="number" name="TEMP_WARN" class="narrow" min="0" max="200" value="<?=(int)($hbastat_cfg['TEMP_WARN'] ?? 60);?>" placeholder="60">
+
+  Critical Threshold (°C, turns text red &amp; triggers notification):
+  : <input type="number" name="TEMP_CRIT" class="narrow" min="0" max="200" value="<?=(int)($hbastat_cfg['TEMP_CRIT'] ?? 70);?>" placeholder="70">
+
+  Send Unraid Notification at Critical Threshold:
+  : <select id="NOTIFY_ENABLE" name="NOTIFY_ENABLE" size="1">
+      <?=mk_option($hbastat_cfg['NOTIFY_ENABLE'] ?? '0', "0", "No");?>
+      <?=mk_option($hbastat_cfg['NOTIFY_ENABLE'] ?? '0', "1", "Yes");?>
+    </select>
+
+  Notification Cooldown (minutes):
+  : <input type="number" name="NOTIFY_COOLDOWN_MIN" class="narrow" min="1" max="1440" value="<?=(int)($hbastat_cfg['NOTIFY_COOLDOWN_MIN'] ?? 60);?>" placeholder="60">
+    <br><small>Minimum time between repeat notifications for the same controller. Resets immediately once the controller cools back below the critical threshold.</small><br><br>
+
+  <h2><b>Columns Shown on Dashboard</b></h2>
+
+  Status Column:
+  : <select id="DISPSTATUS" name="DISPSTATUS" size="1">
+      <?=mk_option($hbastat_cfg['DISPSTATUS'] ?? '1', "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPSTATUS'] ?? '1', "1", "Yes");?>
+    </select>
+
+  Temperature Column:
+  : <select id="DISPTemperature" name="DISPTemperature" size="1">
+      <?=mk_option($hbastat_cfg['DISPTemperature'] ?? '1', "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPTemperature'] ?? '1', "1", "Yes");?>
+    </select>
+
+  SMART Column:
+  : <select id="DISPChkp" name="DISPChkp" size="1">
+      <?=mk_option($hbastat_cfg['DISPChkp'] ?? '1', "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPChkp'] ?? '1', "1", "Yes");?>
+    </select>
+
+  Drives Column:
+  : <select id="DISPPresent" name="DISPPresent" size="1">
+      <?=mk_option($hbastat_cfg['DISPPresent'] ?? '1', "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPPresent'] ?? '1', "1", "Yes");?>
+    </select>
+
+  <h2><b>Detected Controllers</b></h2>
+  <small>Toggle each controller's visibility on the Dashboard.</small><br><br>
+
+<?php foreach ($detected as $ctl):
     $cid = (string)$ctl['id'];
     $label = "Controller {$cid}";
     if (!empty($ctl['vendor']) || !empty($ctl['model'])) {
         $label .= ' — ' . trim(($ctl['vendor'] ?? '') . ' ' . ($ctl['model'] ?? ''));
     }
-    $showVal = hba_cfg_val($hbastat_cfg, 'SHOWCTRL', $cid, '1');
+    $showVal = hba_show_val($hbastat_cfg, $cid);
 ?>
-  <h3><b><?=htmlspecialchars($label)?></b></h3>
-
-  Show on Dashboard:
+  <?=htmlspecialchars($label)?>:
   : <select id="SHOWCTRL_<?=$cid?>" name="SHOWCTRL_<?=$cid?>" size="1">
       <?=mk_option($showVal, "0", "No");?>
       <?=mk_option($showVal, "1", "Yes");?>
     </select>
 
-<?php foreach ($pollerFields as $key => $label): ?>
-<?php $val = hba_cfg_val($hbastat_cfg, $key, $cid, '1'); ?>
-  <?=htmlspecialchars($label)?>:
-  : <select id="<?=$key?>_<?=$cid?>" name="<?=$key?>_<?=$cid?>" size="1">
-      <?=mk_option($val, "0", "No");?>
-      <?=mk_option($val, "1", "Yes");?>
-    </select>
-
-<?php endforeach; ?>
-  <br>
 <?php endforeach; ?>
 
   <br><br><br>

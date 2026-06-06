@@ -31,19 +31,97 @@ require_once __DIR__ . '/lib/Error.php';
 use hbastat\lib\Hba;
 use hbastat\lib\Main;
 
+const HBASTAT_NOTIFY_SCRIPT = '/usr/local/emhttp/webGui/scripts/notify';
+const HBASTAT_NOTIFY_STATE  = '/var/tmp/hbastat_notify_state';
+
 if (!isset($hbastat_cfg)) {
     $hbastat_cfg = Main::getSettings();
 }
 
-// $hbastat_inventory should be set if called from settings page code
 if (isset($hbastat_inventory) && $hbastat_inventory) {
     $hbastat_cfg['inventory'] = true;
     $hbastat_data = (new Hba($hbastat_cfg))->getInventory();
     $json = json_encode($hbastat_data);
 } else {
     $json = (new Hba($hbastat_cfg))->getStatistics();
+    hbastat_check_notify($json, $hbastat_cfg);
 }
 
 header('Content-Type: application/json');
 header('Content-Length: ' . strlen($json));
 echo $json;
+
+/**
+ * If any controller exceeds the configured critical temperature, send an
+ * Unraid notification — respecting the per-controller cooldown so we don't
+ * spam on every poll.
+ */
+function hbastat_check_notify(string $json, array $cfg): void
+{
+    if ((string)($cfg['NOTIFY_ENABLE'] ?? '0') !== '1') {
+        return;
+    }
+    if (!is_file(HBASTAT_NOTIFY_SCRIPT) || !is_executable(HBASTAT_NOTIFY_SCRIPT)) {
+        return;
+    }
+
+    $payload = json_decode($json, true);
+    if (!is_array($payload) || empty($payload['controllers'])) {
+        return;
+    }
+
+    $critC = (int)($cfg['TEMP_CRIT'] ?? 70);
+    $cooldownSec = max(60, ((int)($cfg['NOTIFY_COOLDOWN_MIN'] ?? 60)) * 60);
+
+    $state = [];
+    if (is_file(HBASTAT_NOTIFY_STATE)) {
+        $raw = @file_get_contents(HBASTAT_NOTIFY_STATE);
+        $decoded = $raw === false ? null : json_decode($raw, true);
+        if (is_array($decoded)) {
+            $state = $decoded;
+        }
+    }
+
+    $now = time();
+    $changed = false;
+
+    foreach ($payload['controllers'] as $ctl) {
+        $id = (string)($ctl['controller'] ?? '');
+        if ($id === '') continue;
+        $tempRaw = $ctl['temperature'] ?? null;
+        if ($tempRaw === null || $tempRaw === 'N/A' || $tempRaw === '') continue;
+        $tempC = (int)$tempRaw;
+
+        $lastNotify = (int)($state[$id]['lastNotify'] ?? 0);
+
+        if ($tempC >= $critC) {
+            if (($now - $lastNotify) < $cooldownSec) {
+                continue;
+            }
+            $product = $ctl['product'] ?? 'HBA';
+            $subject = "HBA Controller {$id} over-temperature";
+            $desc = "Controller {$id} ({$product}) at {$tempC} °C — critical threshold is {$critC} °C";
+            $cmd = sprintf(
+                '%s -i %s -s %s -d %s',
+                escapeshellcmd(HBASTAT_NOTIFY_SCRIPT),
+                escapeshellarg('alert'),
+                escapeshellarg($subject),
+                escapeshellarg($desc)
+            );
+            @shell_exec($cmd . ' >/dev/null 2>&1');
+            $state[$id] = ['lastNotify' => $now, 'lastTempC' => $tempC];
+            $changed = true;
+        } else {
+            // Reset cooldown once we drop back below crit so the next over-temp
+            // event fires immediately instead of being throttled.
+            if ($lastNotify !== 0) {
+                unset($state[$id]);
+                $changed = true;
+            }
+        }
+    }
+
+    if ($changed) {
+        @file_put_contents(HBASTAT_NOTIFY_STATE, json_encode($state));
+    }
+}
