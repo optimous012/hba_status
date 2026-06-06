@@ -1,6 +1,5 @@
-Menu="Dashboard"
+Menu="Dashboard:0"
 Icon="gpustat.png"
-Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0-beta6', '<')"
 ---
 <?php
 /*
@@ -27,6 +26,8 @@ Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0-b
   SOFTWARE.
 */
 
+require_once('/usr/local/emhttp/plugins/dynamix/include/Wrappers.php');
+
 $hbastat_cfg = parse_plugin_cfg('hbastat', true);
 
 $pluginConfigured = !(empty($hbastat_cfg)
@@ -34,7 +35,6 @@ $pluginConfigured = !(empty($hbastat_cfg)
     || $hbastat_cfg['VENDOR'] == ""
     || $hbastat_cfg['VENDOR'] == "Change Me");
 
-// Controllers the user has enabled on the dashboard.
 $visibleControllers = [];
 foreach ($hbastat_cfg as $key => $val) {
     if (preg_match('/^SHOWCTRL_(\d+)$/', $key, $m) && (string)$val === '1') {
@@ -43,7 +43,6 @@ foreach ($hbastat_cfg as $key => $val) {
 }
 sort($visibleControllers, SORT_NUMERIC);
 
-// Global column toggles (with sensible defaults).
 $colStatus = (string)($hbastat_cfg['DISPSTATUS']      ?? '1') === '1';
 $colTemp   = (string)($hbastat_cfg['DISPTemperature'] ?? '1') === '1';
 $colSmart  = (string)($hbastat_cfg['DISPChkp']        ?? '1') === '1';
@@ -53,89 +52,82 @@ $colDrives = (string)($hbastat_cfg['DISPPresent']     ?? '1') === '1'
 $tempWarn = (int)($hbastat_cfg['TEMP_WARN'] ?? 60);
 $tempCrit = (int)($hbastat_cfg['TEMP_CRIT'] ?? 70);
 $tempFmt  = (string)($hbastat_cfg['TEMPFORMAT'] ?? 'C');
+
+// Build the tile header subtext.
+if (!$pluginConfigured) {
+    $subtext = 'Please configure HBAStat settings first';
+} elseif (empty($visibleControllers)) {
+    $subtext = 'No controllers selected';
+} else {
+    $n = count($visibleControllers);
+    $subtext = $n . ' controller' . ($n === 1 ? '' : 's');
+}
+
+$header_html = <<<EOT
+<tr>
+    <td><i class="fa fa-fw fa-close control tile" onclick="dismiss(\$(this))" title="Close Tile"></i>
+        <span class="tile-header">
+            <span class="tile-header-left">
+                <i class="icon-hardware f32"></i>
+                <div class="section">
+                    <h3 class="tile-header-main">HBA Controllers</h3>
+                    <span>{$subtext}</span><br>
+                </div>
+            </span>
+            <span class="tile-header-right">
+                <span class="tile-header-right-controls">
+                    <a href="/Dashboard/Settings/HBASettings" title="Go to HBA settings">
+                        <i class="fa fa-fw fa-cog control"></i>
+                    </a>
+                    <i class="fa fa-fw fa-chevron-up control openclose" onclick="openClose(\$(this))" title="Show/Hide Content"></i>
+                </span>
+            </span>
+        </span>
+    </td>
+</tr>
+EOT;
+
+$rows_html = '';
+if ($pluginConfigured && !empty($visibleControllers)) {
+    $colsHtml = '<span class="w40">Controller</span>';
+    if ($colStatus) $colsHtml .= '<span class="w20">Status</span>';
+    if ($colTemp)   $colsHtml .= '<span class="w20">Temp</span>';
+    if ($colSmart)  $colsHtml .= '<span class="w20">SMART</span>';
+    if ($colDrives) $colsHtml .= '<span class="w20">Drives</span>';
+
+    $rows_html .= "<tr class=\"header\"><td>{$colsHtml}</td></tr>";
+
+    foreach ($visibleControllers as $cid) {
+        $cid_esc = htmlspecialchars($cid);
+        $rowParts = [
+            "<span class=\"w40\"><i class=\"icon-hardware f14\"></i> <a href=\"/Dashboard/Settings/HBASettings\" title=\"Controller {$cid_esc} settings\">Ctl {$cid_esc} <span class=\"hba-product-{$cid}\"></span></a></span>"
+        ];
+        if ($colStatus) {
+            $rowParts[] = "<span class=\"w20\"><i class=\"fa fa-circle orb hba-status-orb-{$cid} middle\"></i><span class=\"hba-status-text-{$cid}\">&hellip;</span></span>";
+        }
+        if ($colTemp) {
+            $rowParts[] = "<span class=\"w20\"><span class=\"hba-temperature-{$cid}\">&hellip;</span></span>";
+        }
+        if ($colSmart) {
+            $rowParts[] = "<span class=\"w20\"><span class=\"hba-smart-icon-{$cid} fa fa-thumbs-o-up green-text\" style=\"margin-right:6px\"></span><span class=\"hba-smart-text-{$cid}\">&hellip;</span></span>";
+        }
+        if ($colDrives) {
+            $rowParts[] = "<span class=\"w20\"><span class=\"hba-drives-{$cid}\">&hellip;</span></span>";
+        }
+        $rows_html .= "<tr class=\"updated\"><td>" . implode('', $rowParts) . "</td></tr>";
+    }
+}
+
+$mytiles['hbastat1']['column2'] = <<<EOT
+<tbody title="HBA Controller Information" class="sortable hba-tbody">
+{$header_html}
+{$rows_html}
+</tbody>
+EOT;
 ?>
 <style type="text/css">
     @import url("/plugins/hbastat/css/style.css");
 </style>
-
-<div class='tile' id='hbastat_tile'>
-<table class='dashboard'>
-    <thead class='stopgap'><tr><td class='stopgap'></td></tr></thead>
-    <tbody title='HBA Controller Information' class='sortable hba-tbody'>
-        <tr>
-            <td>
-                <span class='tile-header'>
-                    <span class='tile-header-left'>
-                        <i class='icon-hardware f32'></i>
-                        <div class='section'>
-                            <h3 class='tile-header-main'>HBA Controllers</h3>
-                            <span>
-<?php if (!$pluginConfigured): ?>
-                                Please configure HBAStat settings first
-<?php elseif (empty($visibleControllers)): ?>
-                                No controllers selected
-<?php else: ?>
-                                <?=count($visibleControllers)?> controller<?=count($visibleControllers) === 1 ? '' : 's'?>
-<?php endif; ?>
-                            </span><br>
-                        </div>
-                    </span>
-                    <span class='tile-header-right'>
-                        <span class='tile-header-right-controls'>
-                            <a href='/Dashboard/Settings/HBASettings' title='Go to HBA settings'>
-                                <i class='fa fa-fw fa-cog control'></i>
-                            </a>
-                            <i class='fa fa-fw fa-chevron-up control openclose' onclick='openClose($(this))' title='Show/Hide Content'></i>
-                        </span>
-                    </span>
-                </span>
-            </td>
-        </tr>
-<?php if ($pluginConfigured && !empty($visibleControllers)): ?>
-        <tr class='header'>
-            <td>
-                <span class='w40'>Controller</span>
-                <?php if ($colStatus): ?><span class='w20'>Status</span><?php endif; ?>
-                <?php if ($colTemp):   ?><span class='w20'>Temp</span><?php endif; ?>
-                <?php if ($colSmart):  ?><span class='w20'>SMART</span><?php endif; ?>
-                <?php if ($colDrives): ?><span class='w20'>Drives</span><?php endif; ?>
-            </td>
-        </tr>
-<?php foreach ($visibleControllers as $cid): ?>
-        <tr class='updated'>
-            <td>
-                <span class='w40'>
-                    <i class='icon-hardware f14'></i>
-                    <a href='/Dashboard/Settings/HBASettings' title='Controller <?=htmlspecialchars($cid)?> settings'>
-                        Ctl <?=htmlspecialchars($cid)?> <span class='hba-product-<?=$cid?>'></span>
-                    </a>
-                </span>
-                <?php if ($colStatus): ?>
-                <span class='w20'>
-                    <i class='fa fa-circle orb hba-status-orb-<?=$cid?> middle'></i><span class='hba-status-text-<?=$cid?>'>&hellip;</span>
-                </span>
-                <?php endif; ?>
-                <?php if ($colTemp): ?>
-                <span class='w20'>
-                    <span class='hba-temperature-<?=$cid?>'>&hellip;</span>
-                </span>
-                <?php endif; ?>
-                <?php if ($colSmart): ?>
-                <span class='w20'>
-                    <span class='hba-smart-icon-<?=$cid?> fa fa-thumbs-o-up green-text' style='margin-right:6px'></span><span class='hba-smart-text-<?=$cid?>'>&hellip;</span>
-                </span>
-                <?php endif; ?>
-                <?php if ($colDrives): ?>
-                <span class='w20'>
-                    <span class='hba-drives-<?=$cid?>'>&hellip;</span>
-                </span>
-                <?php endif; ?>
-            </td>
-        </tr>
-<?php endforeach; endif; ?>
-    </tbody>
-</table>
-</div>
 <script type="text/javascript">
     window.HBASTAT_TEMP_FORMAT = "<?=htmlspecialchars($tempFmt, ENT_QUOTES);?>";
     window.HBASTAT_TEMP_WARN   = <?=$tempWarn;?>;
@@ -145,6 +137,6 @@ $tempFmt  = (string)($hbastat_cfg['TEMPFORMAT'] ?? 'C');
 <script type="text/javascript">
     $(hbastat_status);
     if (<?=$hbastat_cfg['UIREFRESH'] ?? '0';?>) {
-        setInterval(hbastat_status, <?=max(abs($display['refresh']), $hbastat_cfg['UIREFRESHINT'] ?? 5000);?>);
+        setInterval(hbastat_status, <?=max(abs(_var($display,'refresh',5000)), $hbastat_cfg['UIREFRESHINT'] ?? 5000);?>);
     }
 </script>
