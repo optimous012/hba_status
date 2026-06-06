@@ -1,0 +1,107 @@
+Menu="Dashboard"
+Icon="gpustat.png"
+Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0-beta6', '<')"
+---
+<?php
+/*
+  MIT License
+
+  Copyright (c) 2026 YourName
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+*/
+
+$hbastat_cfg = parse_plugin_cfg('hbastat', true);
+
+$controller_selected = isset($hbastat_cfg['CONTROLLERID']) ? $hbastat_cfg['CONTROLLERID'] : 0;
+
+?>
+<style type="text/css">
+    @import url("/plugins/hbastat/css/style.css");
+</style>
+
+<table id='db-box1' class='dash_hbastat dashboard box1' style='display:none'>
+    <thead sort='953'><tr class='hidden'><td></td><td colspan='3'></td><td></td></tr></thead>
+    <tbody sort='953' class='sortable'>
+        <tr>
+            <td></td>
+            <td class='next' colspan='3'>
+                <i class='icon-hardware'></i>
+                <div class='section'>HBA Controllers<br>
+<?php if (empty($hbastat_cfg) || !isset($hbastat_cfg['VENDOR']) || $hbastat_cfg['VENDOR'] == "" || $hbastat_cfg['VENDOR'] == "Change Me") : printf("\t\t\t\t<span>Please configure HBAStat settings first</span></div>"); else : ?>
+                    <div id='controller-displays'>
+                        <!-- Controller displays will be inserted here by JavaScript -->
+                    </div>
+<?php endif; ?>
+                </div>
+                <i class='fa fa-fw chevron mt0' id='dash_hbastat_toggle' onclick='toggleChevron("dash_hbastat_toggle",0)'></i>
+                <a href='/Dashboard/Settings/HBASettings' id='dash_hbastat_settings' title='Go to HBA Statistics settings'><i class='fa fa-fw fa-cog chevron mt0'></i></a>
+                <br><br>
+            </td>
+            <td></td>
+        </tr>
+<?php if (empty($hbastat_cfg) || !isset($hbastat_cfg['VENDOR']) || $hbastat_cfg['VENDOR'] == "" || $hbastat_cfg['VENDOR'] == "Change Me") : printf("\t</tbody>\n</table>"); else : ?>
+        <!-- Drive statistics (will show data from first controller or aggregated) -->
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td><span class='hba-vendor'></span>&nbsp;<span class='hba-product'></span></td>
+            <td></td>
+            <td></td>
+        </tr>
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td>Present - Missing Drives</td>
+            <td><span class='hba-present load'></span></td>
+            <td><span class='hba-missing load'></span></td>
+        </tr>
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td>Optimal - Failed Drives</td>
+            <td><span class='hba-optimal load'></span></td>
+            <td><span class='hba-failed load'></span></td>
+        </tr>
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td>Degraded - Offline Drives</td>
+            <td><span class='hba-degraded load'></span></td>
+            <td><span class='hba-offline load'></span></td>
+        </tr>
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td>Rebuild - Consistency Check</td>
+            <td><span class='hba-rebuild load'></span></td>
+            <td><span class='hba-consistency load'></span></td>
+        </tr>
+        <tr class="dash_hbastat_toggle hba-enviro">
+            <td></td>
+            <td>Predictive Failure - Background Ops</td>
+            <td><span class='hba-predictive load'></span></td>
+            <td><span class='hba-background load'></span></td>
+        </tr>
+<?php endif; ?>
+    </tbody>
+</table>
+<script type="text/javascript" src="/plugins/hbastat/scripts/hbastat.js"></script>
+<script type="text/javascript">
+    $(hbastat_status);
+    if (<?=$hbastat_cfg['UIREFRESH'];?>) {
+        setInterval(hbastat_status, <?=max(abs($display['refresh']), $hbastat_cfg['UIREFRESHINT']);?>);
+    }
+    $(hbastat_dash);
+</script>

@@ -1,0 +1,202 @@
+Menu="Utilities"
+Icon="gpustat.png"
+Title="HBA Statistics"
+---
+<?php
+/*
+  MIT License
+
+  Copyright (c) 2026 YourName
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+*/
+
+function save_ini_file($file, $array) {
+   $plugin = "hbastat";
+
+  $res = array();
+  foreach($array as $key => $val) {
+    if(is_array($val)) {
+      $res[] = PHP_EOL."[$key]";
+      foreach($val as $skey => $sval) $res[] = "$skey = ".(is_numeric($sval) ? $sval : '"'.$sval.'"');
+    } else {
+      $res[] = "$key = ".(is_numeric($val) ? $val : '"'.$val.'"');
+     }
+  }
+
+  /* Write changes to tmp file. */
+  file_put_contents($file, implode(PHP_EOL, $res));
+
+  /* Write changes to flash. */
+  $file_path = pathinfo($file);
+  if ($file_path['extension'] == "cfg") {
+    file_put_contents("/boot/config/plugins/".$plugin."/".basename($file), implode(PHP_EOL, $res));
+  }
+}
+
+function save_cfg($val) {
+  save_ini_file("hbastat.cfg", $val) ;
+}
+
+$cfg = $hbastat_cfg        = parse_plugin_cfg("hbastat", true);
+
+if (count($_POST)) {
+  $cfg = NULL ;
+  if ($_POST['#apply'] == "_(Apply)_") {
+    array_map(function($k, $v) use (&$cfg) { if($k[0] != "#") $cfg[$k] = $v; }, array_keys($_POST), $_POST );
+    save_cfg($cfg);
+    $hbastat_cfg        = parse_plugin_cfg("hbastat", true);
+    unset($_POST) ;
+  }
+}
+
+?>
+<script>
+$(function() {
+  // Any specific JS for HBA settings can go here
+});
+</script>
+
+<h2><b>Runtime</b></h2>
+<form markdown="1" name="hbastat" method="POST" >
+  <input type="hidden" name="#file" value="hbastat/hbastat.cfg" />
+
+  Storcli Command Path:
+  : <input type="text" name="STORCLI_PATH" class="wide" value="<?php echo isset($hbastat_cfg['STORCLI_PATH']) ? $hbastat_cfg['STORCLI_PATH'] : 'storcli'; ?>" placeholder="storcli or storcli64 or full path to executable">
+    <br><br>
+    <small>Enter the command to use for storcli (e.g., storcli, storcli64, or /full/path/to/storcli)</small>
+
+  Vendor:
+  : <select id="VENDOR" name="VENDOR" size="1">
+      <?=mk_option($hbastat_cfg['VENDOR'], "", "Change Me");?>
+      <?=mk_option($hbastat_cfg['VENDOR'], "lsilogic", "LSI Logic");?>
+      <?=mk_option($hbastat_cfg['VENDOR'], "broadcom", "Broadcom");?>
+      <?=mk_option($hbastat_cfg['VENDOR'], "adaptec", "Adaptec");?>
+      <?=mk_option($hbastat_cfg['VENDOR'], "intel", "Intel");?>
+      <?=mk_option($hbastat_cfg['VENDOR'], "microsemi", "Microsemi");?>
+    </select>
+
+  Controller ID for Dashboard:
+  : <select id="CONTROLLERID" name="CONTROLLERID" size="1" length="50">
+      <?php
+          // This would normally be populated from inventory data
+          // For now, we'll just have a default option
+          printf(mk_option($hbastat_cfg['CONTROLLERID'], "0", "Controller 0"));
+          printf(mk_option($hbastat_cfg['CONTROLLERID'], "1", "Controller 1"));
+          printf(mk_option($hbastat_cfg['CONTROLLERID'], "2", "Controller 2"));
+          printf(mk_option($hbastat_cfg['CONTROLLERID'], "3", "Controller 3"));
+      ?>
+  </select>
+
+  Temperature Format:
+  : <select id="TEMPFORMAT" name="TEMPFORMAT" size="1">
+      <?=mk_option($hbastat_cfg['TEMPFORMAT'], "C", "Celsius");?>
+      <?=mk_option($hbastat_cfg['TEMPFORMAT'], "F", "Fahrenheit");?>
+    </select>
+
+  UI Automatic Refresh / Interval (Milliseconds):
+  : <select id="UIREFRESH" name="UIREFRESH" size="1">
+      <?=mk_option($hbastat_cfg['UIREFRESH'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['UIREFRESH'], "1", "Yes");?>
+    </select>
+    <input type="number" name="UIREFRESHINT" class="narrow" min="2000" maxlength="5" value="<?=$hbastat_cfg['UIREFRESHINT'];?>" placeholder="5000">
+
+  <h2><b>Enabled Pollers</b></h2>
+
+  Status:
+  : <select id="DISPSTATUS" name="DISPSTATUS" size="1">
+      <?=mk_option($hbastat_cfg['DISPSTATUS'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPSTATUS'], "1", "Yes");?>
+    </select>
+
+  Temperature:
+  : <select id="DISPTemperature" name="DISPTemperature" size="1">
+      <?=mk_option($hbastat_cfg['DISPTemperature'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPTemperature'], "1", "Yes");?>
+    </select>
+
+  Present Drives:
+  : <select id="DISPPresent" name="DISPPresent" size="1">
+      <?=mk_option($hbastat_cfg['DISPPresent'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPPresent'], "1", "Yes");?>
+    </select>
+
+  Missing Drives:
+  : <select id="DISPMissng" name="DISPMissng" size="1">
+      <?=mk_option($hbastat_cfg['DISPMissng'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPMissng'], "1", "Yes");?>
+    </select>
+
+  Optimal Drives:
+  : <select id="DISPOptl" name="DISPOptl" size="1">
+      <?=mk_option($hbastat_cfg['DISPOptl'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPOptl'], "1", "Yes");?>
+    </select>
+
+  Failed Drives:
+  : <select id="DISPDgrd" name="DISPDgrd" size="1">
+      <?=mk_option($hbastat_cfg['DISPDgrd'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPDgrd'], "1", "Yes");?>
+    </select>
+
+  Degraded Drives:
+  : <select id="DISPDdff" name="DISPDdff" size="1">
+      <?=mk_option($hbastat_cfg['DISPDdff'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPDdff'], "1", "Yes");?>
+    </select>
+
+  Offline Drives:
+  : <select id="DISPOnLn" name="DISPOnLn" size="1">
+      <?=mk_option($hbastat_cfg['DISPOnLn'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPOnLn'], "1", "Yes");?>
+    </select>
+
+  Rebuild Operations:
+  : <select id="DISPRbld" name="DISPRbld" size="1">
+      <?=mk_option($hbastat_cfg['DISPRbld'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPRbld'], "1", "Yes");?>
+    </select>
+
+  Consistency Check:
+  : <select id="DISPChky" name="DISPChky" size="1">
+      <?=mk_option($hbastat_cfg['DISPChky'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPChky'], "1", "Yes");?>
+    </select>
+
+  Predictive Failure:
+  : <select id="DISPChkp" name="DISPChkp" size="1">
+      <?=mk_option($hbastat_cfg['DISPChkp'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPChkp'], "1", "Yes");?>
+    </select>
+
+  Background Operations:
+  : <select id="DISPBlk" name="DISPBlk" size="1">
+      <?=mk_option($hbastat_cfg['DISPBlk'], "0", "No");?>
+      <?=mk_option($hbastat_cfg['DISPBlk'], "1", "Yes");?>
+    </select>
+
+  <br><br><br>
+
+  : <input id="btnApply" type="submit" name="#apply" value="_(Apply)_"><input type="button" value="Done" onClick="done()">
+
+  <br><br><br>
+  Note: This plugin uses the storcli command line utility to monitor HBA controllers.
+  Please ensure storcli is installed and accessible in your system's PATH.
+  <br><br><br>
+</form>
